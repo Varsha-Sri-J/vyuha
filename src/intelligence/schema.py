@@ -178,3 +178,118 @@ class Alert:
     def from_json(cls, json_str: str) -> "Alert":
         """Instantiates an Alert from a JSON string."""
         return cls.from_dict(json.loads(json_str))
+
+
+# -----------------------------------------------------------------------------
+# Incident Intelligence Data Models
+# -----------------------------------------------------------------------------
+
+class IncidentStatus(str, Enum):
+    """Operational lifecycle status of an incident.
+
+    All automatically generated incidents begin as CANDIDATE.
+    Subsequent workflow stages represent human investigator triage.
+    """
+    CANDIDATE = "CANDIDATE"
+    UNDER_INVESTIGATION = "UNDER_INVESTIGATION"
+    CONFIRMED = "CONFIRMED"
+    RESOLVED = "RESOLVED"
+    FALSE_POSITIVE = "FALSE_POSITIVE"
+
+
+class RelationshipType(str, Enum):
+    """Categorization of edges in the alert relationship graph."""
+    SAME_FLOW = "same_flow"
+    SHARED_SOURCE_IP = "shared_source_ip"
+    SHARED_DESTINATION_IP = "shared_destination_ip"
+    SHARED_NETWORK_ENTITY = "shared_network_entity"
+    SHARED_DESTINATION_PORT = "shared_destination_port"
+    REPEATED_CATEGORY = "repeated_category"
+    DETECTION_ENGINE_AGREEMENT = "detection_engine_agreement"
+    TEMPORAL_PROXIMITY = "temporal_proximity"
+    TEMPORAL_SEQUENCE = "temporal_sequence"
+    TEMPORAL_RECURRENCE = "temporal_recurrence"
+
+
+@dataclass
+class AlertRelationship:
+    """An explainable edge connecting two alerts in the relationship graph."""
+    relationship_id: str
+    source_alert_id: str
+    target_alert_id: str
+    relationship_type: str
+    weight: float = 1.0
+    grouping_eligible: bool = False
+    evidence: Dict[str, Any] = field(default_factory=dict)
+    description: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AlertRelationship":
+        """Instantiates an AlertRelationship from a dictionary."""
+        d = data.copy()
+        if "evidence" not in d or d["evidence"] is None:
+            d["evidence"] = {}
+        return cls(**d)
+
+    @classmethod
+    def from_json(cls, json_str: str) -> "AlertRelationship":
+        """Instantiates an AlertRelationship from a JSON string."""
+        return cls.from_dict(json.loads(json_str))
+
+
+@dataclass
+class CandidateIncident:
+    """A cluster of related alerts representing an explainable candidate security incident."""
+    incident_id: str
+    alert_ids: List[str]
+    status: str = IncidentStatus.CANDIDATE.value
+    severity: str = AlertSeverity.LOW.value
+    first_timestamp: Optional[str] = None
+    last_timestamp: Optional[str] = None
+    source_ips: List[str] = field(default_factory=list)
+    destination_ips: List[str] = field(default_factory=list)
+    source_ports: List[int] = field(default_factory=list)
+    destination_ports: List[int] = field(default_factory=list)
+    attack_categories: List[str] = field(default_factory=list)
+    threat_statuses: List[str] = field(default_factory=list)
+    detection_engines: List[str] = field(default_factory=list)
+    alerts_count: int = 0
+    relationships: List[Dict[str, Any]] = field(default_factory=list)
+    relationship_count: int = 0
+    explanation: Dict[str, Any] = field(default_factory=dict)
+    summary_text: str = ""
+    recommendations: List[str] = field(default_factory=list)
+    missing_evidence: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    def to_json(self, indent: Optional[int] = None) -> str:
+        return json.dumps(self.to_dict(), indent=indent, default=str)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "CandidateIncident":
+        """Instantiates a CandidateIncident from a dictionary."""
+        d = data.copy()
+        list_fields = [
+            "alert_ids", "source_ips", "destination_ips", "source_ports",
+            "destination_ports", "attack_categories", "threat_statuses",
+            "detection_engines", "relationships", "recommendations", "missing_evidence",
+        ]
+        for lf in list_fields:
+            if lf not in d or d[lf] is None:
+                d[lf] = []
+        for df in ["explanation", "metadata"]:
+            if df not in d or d[df] is None:
+                d[df] = {}
+        return cls(**d)
+
+    @classmethod
+    def from_json(cls, json_str: str) -> "CandidateIncident":
+        """Instantiates a CandidateIncident from a JSON string."""
+        return cls.from_dict(json.loads(json_str))
+
