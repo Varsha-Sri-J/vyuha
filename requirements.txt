@@ -1,0 +1,21 @@
+# VYUHA Dependencies
+# Data Processing & Analysis
+numpy>=2.0.0
+pandas>=2.2.0
+scipy>=1.13.0
+pyarrow>=20.0.0
+
+# Machine Learning
+scikit-learn>=1.5.0
+joblib>=1.4.0
+
+# Network & Graph Intelligence
+networkx>=3.2.0
+
+# Backend API
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.7.0
+
+# Testing & Quality Assurance
+pytest>=8.0.0

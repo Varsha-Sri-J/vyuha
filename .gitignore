@@ -35,8 +35,9 @@ env.bak/
 venv.bak/
 
 # Datasets and large data dumps
-datasets/
-data/
+/datasets/
+/data/
+!src/data/
 *.csv
 *.pcap
 *.pcap_ISCX
