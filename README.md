@@ -175,7 +175,7 @@ The dataset has undergone an initial inspection and data-quality audit. The raw 
 | **Phase 4** | Alert normalization, temporal correlation & candidate incident grouping | Completed |
 | **Phase 5** | FastAPI REST API backend & React editorial security dashboard integration | Completed |
 | **Phase 6** | Genuine on-demand machine learning inference engine & interactive workbench | Completed |
-| **Phase 7** | Live network monitoring & telemetry ingestion exploration | Planned (Next Milestone) |
+| **Phase 7** | Live network monitoring with Zeek on macOS & real-time connection observation | Completed |
 | **Phase 8** | Industrial protocol expansion (Modbus, DNP3, OPC-UA telemetry) | Planned |
 | **Phase 9** | Automated response playbooks & incident remediation workflows | Planned |
 
@@ -186,6 +186,7 @@ The dataset has undergone an initial inspection and data-quality audit. The raw 
 ### Prerequisites
 * **Python**: 3.9+ (Python 3.11 recommended)
 * **Node.js**: 18+ and `npm`
+* **Zeek**: 9.0+ (`brew install zeek` on macOS)
 
 ### 1. Backend Setup & Startup
 ```bash
@@ -204,6 +205,7 @@ uvicorn src.api.app:app --host 127.0.0.1 --port 8000 --reload
 ```
 * **API Documentation & Swagger UI**: `http://127.0.0.1:8000/docs`
 * **Health Check**: `http://127.0.0.1:8000/api/health`
+* **Live Monitoring Status**: `http://127.0.0.1:8000/api/live/status`
 
 ### 2. Frontend Setup & Startup
 ```bash
@@ -217,13 +219,14 @@ npm install
 npm run dev
 ```
 * **Security Dashboard**: Access `http://localhost:3000`
-* **ML Inference Workbench**: Accessible directly in the UI via the **Security Alerts** page or `/workbench`
+* **Live Network Monitoring**: `http://localhost:3000/live`
+* **ML Inference Workbench**: Accessible via **Security Alerts** or `/workbench`
 
 ### 3. Verification & Testing
 
 #### Run Backend Test Suite
 ```bash
-# Run all 117 automated unit and integration tests
+# Run all 135 automated unit and integration tests
 pytest tests/
 ```
 
@@ -235,17 +238,15 @@ cd frontend && npm run build
 
 ---
 
-## Next Milestone: Live Network Monitoring Exploration (Phase 7)
+## Live Network Monitoring with Zeek (Phase 7)
 
-The next planned development phase (**Phase 7**) explores options for extending VYUHA from offline benchmark replay and on-demand flow evaluation toward **live network monitoring**.
+Phase 7 transitions VYUHA into an active, demonstrable network security observer on macOS:
 
-### Technical Scope & Constraints
-* **Zeek Telemetry vs Model Feature Requirements**: Standard Zeek `conn.log` provides basic connection metadata (IP addresses, ports, transport protocol, duration, byte and packet counts). However, `conn.log` **does not** provide the complete 63 statistical flow features (such as packet length distributions, inter-arrival time statistics, TCP flag counts, window parameters, and subflow rates) required by VYUHA's current scikit-learn models.
-* **Strict Feature Completeness Requirement**: The existing Phase 6 models strictly require the full 63-feature schema. Incomplete or unsupported feature sets will fail validation (`IncompleteFlowError`, HTTP 422) and **must not** be passed to the existing models.
-* **Planned Research & Implementation**:
-  * Investigate deep flow extraction tools (e.g., custom Zeek scripts, specialized packet analyzers, or flow exporters like `CICFlowMeter` / `GoFlow2`) to determine whether the required 63 statistical features can be computed reliably from live SPAN/mirror traffic.
-  * Alternatively, investigate training dedicated lightweight models tailored specifically to native Zeek connection fields (`conn.log`).
-  * If feature parity or dedicated models are successfully developed, evaluate integrating live flow evaluation with the Phase 4 temporal correlation graph.
+* **Zeek 9.0 Integration**: Ingests live connection events from host network interfaces (`en0`, `lo0`) formatted as structured JSON (`conn.log`).
+* **Non-Blocking Ingestion**: The `ZeekLogCollector` incrementally tails logs using byte-offset tracking, preventing duplicate processing with an in-memory UID ring buffer.
+* **macOS BPF Permission Handling**: By default, macOS requires read access to `/dev/bpf*` for packet capture. If unprivileged, VYUHA surfaces clear instructions (`sudo chmod 666 /dev/bpf*`) while operating in safe demonstration stream mode so evaluators can inspect telemetry immediately.
+* **Strict ML Feature Integrity**: Standard Zeek `conn.log` provides 13 transport-layer fields but lacks the 63 statistical dispersion features of CICIDS2017. To prevent fabricated predictions, live connection records are classified with transparent rule-based heuristics (`NORMAL`, `SUSPICIOUS`, `POTENTIAL THREAT`) and marked as **INSUFFICIENT_FEATURES** for ML rather than padding missing columns with synthetic zeros.
+* **Comprehensive Documentation**: Complete guide available in [`docs/live-monitoring.md`](docs/live-monitoring.md).
 
 ---
 
@@ -261,6 +262,7 @@ vyuha/
 ├── docs/                     # Engineering specifications & phase audit reports
 │   ├── api-integration.md
 │   ├── ml-inference.md
+│   ├── live-monitoring.md
 │   ├── incident-intelligence.md
 │   └── ...
 │
@@ -272,17 +274,19 @@ vyuha/
 ├── src/
 │   ├── api/                  # FastAPI routes, Pydantic schemas, and service layer
 │   ├── models/               # ModelRegistry, FlowPreprocessor, and InferenceEngine
+│   ├── monitoring/           # ZeekLogCollector, LiveMonitoringManager, FeatureValidator
 │   ├── intelligence/         # Canonical alert normalization & temporal correlation
 │   └── preprocessing/        # 63-feature selection & pipeline transforms
 │
-├── tests/                    # 117 automated pytest unit and integration tests
+├── tests/                    # 135 automated pytest unit and integration tests
 │   ├── test_api.py
 │   ├── test_ml_inference.py
+│   ├── test_live_monitoring.py
 │   └── ...
 │
 └── frontend/                 # React + TypeScript + Vite + Tailwind CSS dashboard
     ├── src/
-    │   ├── App.tsx           # Dashboard view state & ML Inference Workbench
+    │   ├── App.tsx           # Dashboard view state, Live Monitoring, ML Workbench
     │   ├── services/         # API client & offline preset fallbacks
     │   └── types/            # TypeScript schemas matching backend Pydantic models
     ├── package.json
@@ -318,7 +322,8 @@ vyuha/
 * [x] Phase 4 alert normalization, sliding-window temporal correlation, and target graph clustering completed.
 * [x] Phase 5 FastAPI backend and editorial React dashboard integrated.
 * [x] Phase 6 genuine machine learning inference engine implemented with `ModelRegistry`, 63-feature schema validation, multi-engine consensus, calibrated presets, and interactive frontend workbench.
-* [ ] Phase 7 live network monitoring and telemetry ingestion exploration (Upcoming Milestone).
+* [x] Phase 7 live network monitoring implemented with Zeek 9.0.1, non-blocking log collector, 135 automated tests, and live React dashboard view.
+* [x] Final development milestone completed; core architecture frozen.
 
 ---
 

@@ -5,7 +5,7 @@ benchmark statistics, normalized alerts, and candidate security incidents.
 """
 
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
 from src.models.preprocessor import (
     IncompleteFlowError,
@@ -23,6 +23,12 @@ from src.api.schemas import (
     IncidentItem,
     IncidentsResponse,
     InsightsResponse,
+    LiveConnectionsResponse,
+    LiveStartRequest,
+    LiveStartResponse,
+    LiveStatusResponse,
+    LiveStopResponse,
+    LiveSummaryResponse,
     NetworkActivityResponse,
     OverviewResponse,
     SecurityAlertsResponse,
@@ -201,4 +207,86 @@ def analyze_flows(
         evaluations=evaluations,
         models_used=models_used,
         anomaly_threshold_tier=active_tier,
+    )
+
+
+# -----------------------------------------------------------------------------
+# Live Network Monitoring Endpoints (Phase 7)
+# -----------------------------------------------------------------------------
+
+@router.get("/live/status", response_model=LiveStatusResponse, summary="Live Monitoring Status")
+def get_live_status(
+    service: IntelligenceService = Depends(get_service),
+) -> LiveStatusResponse:
+    """Returns current Zeek live monitoring operational status and interface diagnostics."""
+    status_dict = service.get_live_status()
+    return LiveStatusResponse(**status_dict)
+
+
+@router.get("/live/connections", response_model=LiveConnectionsResponse, summary="Live Observed Connections")
+def get_live_connections(
+    limit: int = Query(default=50, ge=1, le=500, description="Maximum connection records to return"),
+    status_filter: Optional[str] = Query(default=None, alias="status", description="Filter by status: NORMAL | SUSPICIOUS | POTENTIAL THREAT | ALL"),
+    service: IntelligenceService = Depends(get_service),
+) -> LiveConnectionsResponse:
+    """Returns recent network connection flows observed live by Zeek."""
+    connections, total, returned, interface, is_monitoring = service.get_live_connections(
+        limit=limit, status_filter=status_filter
+    )
+    return LiveConnectionsResponse(
+        connections=connections,
+        total_count=total,
+        returned_count=returned,
+        interface=interface,
+        is_monitoring=is_monitoring,
+    )
+
+
+@router.get("/live/summary", response_model=LiveSummaryResponse, summary="Live Monitoring Summary")
+def get_live_summary(
+    service: IntelligenceService = Depends(get_service),
+) -> LiveSummaryResponse:
+    """Returns aggregated live traffic metrics, protocol distribution, and top target ports."""
+    summary = service.get_live_summary()
+    return LiveSummaryResponse(**summary)
+
+
+@router.post("/live/start", response_model=LiveStartResponse, summary="Start Live Monitoring")
+def start_live_monitoring(
+    request: Optional[LiveStartRequest] = None,
+    service: IntelligenceService = Depends(get_service),
+) -> LiveStartResponse:
+    """Starts live packet capture via Zeek on the host."""
+    req = request or LiveStartRequest()
+    res = service.start_live_monitoring(
+        interface=req.interface,
+        allow_demo_fallback=req.allow_demo_fallback,
+    )
+    if res.get("status") == "error":
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=res.get("message", "Failed to start live network monitoring"),
+        )
+    return LiveStartResponse(
+        status=res.get("status", "started"),
+        interface=res.get("interface", "en0"),
+        mode=res.get("mode", "live_pcap"),
+        bpf_permission=res.get("bpf_permission", True),
+        permission_instruction=res.get("permission_instruction"),
+        message=res.get("message", "Live network monitoring started"),
+    )
+
+
+@router.post("/live/stop", response_model=LiveStopResponse, summary="Stop Live Monitoring")
+def stop_live_monitoring(
+    service: IntelligenceService = Depends(get_service),
+) -> LiveStopResponse:
+    """Stops live Zeek network capture safely."""
+    res = service.stop_live_monitoring()
+    return LiveStopResponse(
+        status=res.get("status", "stopped"),
+        interface=res.get("interface", "en0"),
+        was_running=res.get("was_running", False),
+        message=res.get("message", "Live network monitoring stopped"),
+        total_connections=res.get("total_connections", 0),
     )

@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronRight,
   Clock3,
+  Copy,
   Eye,
   FileSearch,
   Filter,
@@ -21,12 +22,15 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Play,
+  Radio,
   RefreshCw,
   Search,
   ShieldCheck,
   Sparkles,
+  Square,
   Target,
   TrendingUp,
+  Wifi,
   X,
   Zap,
 } from 'lucide-react'
@@ -59,7 +63,11 @@ import type {
   IncidentEvidenceItem,
   IncidentStatus,
   InsightsData,
+  LiveConnectionItem,
+  LiveStatusResponse,
+  LiveSummaryResponse,
   NetworkActivityData,
+  NetworkInterfaceInfo,
   OverviewData,
   Page,
   SecurityAlertsData,
@@ -77,8 +85,13 @@ import {
   getIncidentDetails,
   getIncidents,
   getInsights,
+  getLiveConnections,
+  getLiveStatus,
+  getLiveSummary,
   getNetworkActivity,
   getOverview,
+  startLiveMonitoring,
+  stopLiveMonitoring,
 } from './services/api'
 import { initialFlowPresets } from './services/presets'
 
@@ -179,6 +192,7 @@ const initialIncidents: Incident[] = [
 
 const navItems: { id: Page; label: string; icon: LucideIcon; short?: string }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+  { id: 'live', label: 'Live Monitoring', icon: Radio, short: 'Live' },
   { id: 'activity', label: 'Network Activity', icon: Activity },
   { id: 'alerts', label: 'Security Alerts', icon: Bell, short: '4' },
   { id: 'incidents', label: 'Incidents', icon: Target, short: '2' },
@@ -188,6 +202,7 @@ const navItems: { id: Page; label: string; icon: LucideIcon; short?: string }[] 
 
 const pathForPage: Record<Page, string> = {
   overview: '/',
+  live: '/live',
   activity: '/network-activity',
   alerts: '/security-alerts',
   incidents: '/incidents',
@@ -362,6 +377,10 @@ function App() {
               data={overviewData}
               loading={loading}
             />
+          )}
+
+          {activePage === 'live' && (
+            <LiveMonitoring onNavigate={navigate} />
           )}
 
           {activePage === 'activity' && (
@@ -954,6 +973,479 @@ function MiniMetric({ label, value, note, tone }: { label: string; value: string
 
 function MomentItem({ time, title, copy }: { time: string; title: string; copy: string }) {
   return <div className="moment-item"><span className="moment-time">{time}</span><div><strong>{title}</strong><p>{copy}</p></div></div>
+}
+
+// ----------------------------------------------------------------------------
+// Phase 7: Live Network Monitoring with Zeek
+// ----------------------------------------------------------------------------
+
+function LiveMonitoring({ onNavigate }: { onNavigate: (page: Page) => void }) {
+  const [status, setStatus] = useState<LiveStatusResponse | null>(null)
+  const [connections, setConnections] = useState<LiveConnectionItem[]>([])
+  const [summary, setSummary] = useState<LiveSummaryResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [actionLoading, setActionLoading] = useState(false)
+  const [selectedInterface, setSelectedInterface] = useState<string>('en0')
+  const [statusFilter, setStatusFilter] = useState<string>('ALL')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [autoRefresh, setAutoRefresh] = useState(true)
+  const [expandedUid, setExpandedUid] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  const fetchData = useCallback(async () => {
+    try {
+      const [st, conn, sum] = await Promise.all([
+        getLiveStatus(),
+        getLiveConnections(100, statusFilter),
+        getLiveSummary(),
+      ])
+      setStatus(st)
+      if (st.interface && (!selectedInterface || selectedInterface === 'en0')) {
+        setSelectedInterface(st.interface)
+      }
+      setConnections(conn.connections)
+      setSummary(sum)
+      setErrorMessage(null)
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Could not reach live monitoring API.')
+    } finally {
+      setLoading(false)
+    }
+  }, [selectedInterface, statusFilter])
+
+  useEffect(() => {
+    fetchData()
+  }, [fetchData])
+
+  useEffect(() => {
+    if (!autoRefresh) return
+    const interval = setInterval(() => {
+      fetchData()
+    }, 2500)
+    return () => clearInterval(interval)
+  }, [autoRefresh, fetchData])
+
+  const handleStart = async () => {
+    setActionLoading(true)
+    try {
+      await startLiveMonitoring(selectedInterface, true)
+      await fetchData()
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to start live monitoring.')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleStop = async () => {
+    setActionLoading(true)
+    try {
+      await stopLiveMonitoring()
+      await fetchData()
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to stop live monitoring.')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleCopyCmd = () => {
+    navigator.clipboard.writeText('sudo chmod 666 /dev/bpf*')
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  const isRunning = status?.status === 'RUNNING'
+  const isDemo = status?.mode === 'demonstration_stream'
+
+  const filteredConnections = useMemo(() => {
+    if (!searchQuery) return connections
+    const q = searchQuery.toLowerCase()
+    return connections.filter((c) =>
+      c.src_ip.toLowerCase().includes(q) ||
+      c.dst_ip.toLowerCase().includes(q) ||
+      String(c.src_port).includes(q) ||
+      String(c.dst_port).includes(q) ||
+      c.proto.toLowerCase().includes(q) ||
+      (c.service && c.service.toLowerCase().includes(q)) ||
+      c.detection_status.toLowerCase().includes(q)
+    )
+  }, [connections, searchQuery])
+
+  const totalCount = summary?.total_connections ?? connections.length
+  const statusDist = summary?.status_distribution ?? {}
+  const protoDist = summary?.protocol_distribution ?? {}
+
+  return (
+    <>
+      <PageHeader
+        eyebrow={`Live Network Monitoring · Zeek ${status?.zeek_version || '9.0'}`}
+        title="Real-Time Network Observation"
+        description="Observes live packet connections from your Mac network interfaces. Unpacks transport telemetry with rule-based heuristics while upholding strict 63-feature ML model boundaries."
+        actions={
+          <div className="live-controls-row">
+            <select
+              className="live-iface-select"
+              value={selectedInterface}
+              disabled={isRunning || actionLoading}
+              onChange={(e) => setSelectedInterface(e.target.value)}
+              aria-label="Capture Interface"
+            >
+              {(status?.available_interfaces || [{ name: 'en0', ip: '172.51.128.120', is_active: true }]).map((iface) => (
+                <option key={iface.name} value={iface.name}>
+                  {iface.name} ({iface.ip}){iface.is_active ? ' • active' : ''}
+                </option>
+              ))}
+            </select>
+
+            {isRunning ? (
+              <button
+                type="button"
+                className="button button-secondary"
+                style={{ borderColor: '#d47b62', color: '#b6614a' }}
+                onClick={handleStop}
+                disabled={actionLoading}
+              >
+                <Square size={14} fill="#b6614a" /> Stop Monitoring
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="button button-dark"
+                onClick={handleStart}
+                disabled={actionLoading}
+              >
+                <Play size={14} /> Start Live Monitoring
+              </button>
+            )}
+
+            <button
+              type="button"
+              className="button button-secondary"
+              onClick={fetchData}
+              disabled={loading || actionLoading}
+              title="Refresh connection records"
+            >
+              <RefreshCw size={14} className={loading ? 'spin' : ''} />
+            </button>
+          </div>
+        }
+      />
+
+      {/* Live Operational Status Strip */}
+      <div className="live-header-bar">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+          <span className={`live-status-pill ${isRunning ? 'live-status-running' : 'live-status-stopped'}`}>
+            <span className="live-pulse-dot" />
+            {isRunning ? 'Capturing Live' : 'Monitoring Stopped'}
+          </span>
+
+          <span className="live-mode-badge">
+            <Wifi size={12} />
+            {isDemo ? 'Demonstration Stream' : isRunning ? 'Live BPF Capture' : 'Engine Idle'}
+          </span>
+
+          <span className="live-mode-badge">
+            Interface: <strong>{status?.interface || selectedInterface}</strong>
+          </span>
+
+          <span className="live-mode-badge">
+            Zeek: {status?.zeek_installed ? 'Installed (v9.0.1)' : 'Not Found'}
+          </span>
+        </div>
+
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#7a7368', cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={autoRefresh}
+            onChange={(e) => setAutoRefresh(e.target.checked)}
+            style={{ accentColor: '#4a443a' }}
+          />
+          Auto-refresh (2.5s)
+        </label>
+      </div>
+
+      {/* macOS BPF Permission Notice */}
+      {status && !status.bpf_permission && (
+        <div className="bpf-alert-banner">
+          <AlertCircle size={18} style={{ flexShrink: 0, marginTop: '2px' }} />
+          <div style={{ flex: 1 }}>
+            <strong>macOS Packet Capture Permissions:</strong> Standard macOS limits raw BPF packet sniffing to root.
+            The engine is currently running safe local demonstration streaming. To capture direct hardware packets from{' '}
+            <code>{selectedInterface}</code>, run in your terminal:
+            <code className="bpf-alert-code">sudo chmod 666 /dev/bpf*</code>
+            <button
+              type="button"
+              onClick={handleCopyCmd}
+              style={{
+                marginLeft: '8px',
+                padding: '2px 8px',
+                borderRadius: '5px',
+                border: '1px solid #d8c3a5',
+                background: '#fffdf9',
+                color: '#6e4b1c',
+                fontSize: '10px',
+                cursor: 'pointer',
+              }}
+            >
+              <Copy size={11} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+              {copied ? 'Copied!' : 'Copy command'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Error Notice */}
+      {errorMessage && (
+        <div className="bpf-alert-banner" style={{ background: '#fce8e3', borderColor: '#f3c2b7', color: '#8e3520' }}>
+          <AlertCircle size={18} style={{ flexShrink: 0 }} />
+          <div>{errorMessage}</div>
+        </div>
+      )}
+
+      {/* ML Feature Constraint Notice */}
+      <div className="ml-constraint-notice">
+        <Info size={18} style={{ flexShrink: 0, marginTop: '2px' }} />
+        <div>
+          <strong>ML Feature Constraint & Data Integrity:</strong> VYUHA's trained Phase 6 scikit-learn models require
+          all 63 statistical dispersion and inter-arrival time features from CICIDS2017. Standard Zeek <code>conn.log</code> records
+          supply 13 transport-layer connection fields. To prevent fabricated predictions, live connection records are classified with
+          transparent rule-based heuristics (<code>NORMAL</code>, <code>SUSPICIOUS</code>, <code>POTENTIAL THREAT</code>) and marked
+          as <strong>INSUFFICIENT_FEATURES</strong> for ML, preserving raw telemetry without filling missing features with synthetic zeros.
+        </div>
+      </div>
+
+      {/* Stat Cards Strip */}
+      <div className="live-stat-strip">
+        <div className="live-stat-card">
+          <span className="live-stat-label">Connections Observed</span>
+          <span className="live-stat-value">{formatNumber(totalCount)}</span>
+          <span className="live-stat-sub">Across active monitoring session</span>
+        </div>
+
+        <div className="live-stat-card">
+          <span className="live-stat-label">Active Host Interface</span>
+          <span className="live-stat-value" style={{ fontSize: '18px' }}>
+            {status?.interface || selectedInterface}
+          </span>
+          <span className="live-stat-sub">
+            IP: {status?.available_interfaces.find((i) => i.name === (status?.interface || selectedInterface))?.ip || '172.51.128.120'}
+          </span>
+        </div>
+
+        <div className="live-stat-card">
+          <span className="live-stat-label">Protocols Observed</span>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'baseline', marginTop: '2px' }}>
+            <span style={{ fontFamily: 'DM Mono', fontSize: '14px', fontWeight: 600 }}>TCP: {protoDist['TCP'] || 0}</span>
+            <span style={{ fontFamily: 'DM Mono', fontSize: '12px', color: '#8c857b' }}>UDP: {protoDist['UDP'] || 0}</span>
+          </div>
+          <span className="live-stat-sub">Transport protocol distribution</span>
+        </div>
+
+        <div className="live-stat-card">
+          <span className="live-stat-label">Heuristic Observations</span>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'baseline', marginTop: '2px' }}>
+            <span style={{ color: '#2f6944', fontWeight: 600, fontSize: '13px' }}>Normal: {statusDist['NORMAL'] || 0}</span>
+            <span style={{ color: '#8c711d', fontWeight: 600, fontSize: '13px' }}>Susp: {statusDist['SUSPICIOUS'] || 0}</span>
+            <span style={{ color: '#aa3d24', fontWeight: 600, fontSize: '13px' }}>Threat: {statusDist['POTENTIAL THREAT'] || 0}</span>
+          </div>
+          <span className="live-stat-sub">Rule-based triage categories</span>
+        </div>
+      </div>
+
+      {/* Connections Table Card */}
+      <section className="live-table-card">
+        <div className="live-table-head">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <h2 className="live-table-title">Observed Network Connections</h2>
+            <span style={{ fontSize: '11px', color: '#9c958b', fontFamily: 'DM Mono' }}>
+              Showing {filteredConnections.length} of {totalCount}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+            <div className="search-input" style={{ width: '220px' }}>
+              <Search size={15} />
+              <input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search IP, port, proto..."
+                aria-label="Filter connections"
+              />
+              {searchQuery && (
+                <button onClick={() => setSearchQuery('')} aria-label="Clear filter">
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+
+            <div className="live-filter-group">
+              {['ALL', 'NORMAL', 'SUSPICIOUS', 'POTENTIAL THREAT'].map((st) => (
+                <button
+                  key={st}
+                  type="button"
+                  className={`live-filter-btn ${statusFilter === st ? 'active' : ''}`}
+                  onClick={() => setStatusFilter(st)}
+                >
+                  {st}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Table Header Row */}
+        <div className="live-conn-row live-conn-header">
+          <span>Time</span>
+          <span>Source</span>
+          <span>Destination</span>
+          <span>Proto</span>
+          <span>State</span>
+          <span>Volume</span>
+          <span>Observation</span>
+          <span>ML Eligibility</span>
+          <span></span>
+        </div>
+
+        {/* Connection Rows */}
+        {filteredConnections.length === 0 ? (
+          <div style={{ padding: '36px 20px', textAlign: 'center', color: '#9c958b', fontSize: '12px' }}>
+            {isRunning
+              ? 'Listening for packets on ' + (status?.interface || selectedInterface) + '... Connections will appear as traffic occurs.'
+              : 'Monitoring is stopped. Click "Start Live Monitoring" above to observe connections.'}
+          </div>
+        ) : (
+          filteredConnections.map((conn) => {
+            const isExpanded = expandedUid === conn.uid
+            const stateExp =
+              conn.conn_state === 'SF' ? 'Normal SYN/FIN' :
+              conn.conn_state === 'S0' ? 'SYN sent, no response' :
+              conn.conn_state === 'REJ' ? 'Connection rejected' :
+              conn.conn_state === 'RSTO' ? 'Reset by originator' : conn.conn_state
+
+            return (
+              <div key={conn.uid} style={{ display: 'contents' }}>
+                <div
+                  className="live-conn-row"
+                  onClick={() => setExpandedUid(isExpanded ? null : conn.uid)}
+                  style={{ cursor: 'pointer' }}
+                >
+                  <span style={{ fontFamily: 'DM Mono', fontSize: '11px', color: '#7a7469' }}>
+                    {conn.timestamp}
+                  </span>
+
+                  <div className="live-endpoint-cell">
+                    <span>{conn.src_ip}</span>
+                    <span className="live-endpoint-service">port {conn.src_port}</span>
+                  </div>
+
+                  <div className="live-endpoint-cell">
+                    <span>{conn.dst_ip}</span>
+                    <span className="live-endpoint-service">
+                      port {conn.dst_port} {conn.service ? `(${conn.service.toUpperCase()})` : ''}
+                    </span>
+                  </div>
+
+                  <span style={{ fontFamily: 'DM Mono', fontSize: '11px', color: '#575249' }}>
+                    {conn.proto}
+                  </span>
+
+                  <span
+                    style={{ fontFamily: 'DM Mono', fontSize: '10px', color: '#736d62' }}
+                    title={stateExp}
+                  >
+                    {conn.conn_state}
+                  </span>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', fontSize: '10px', color: '#7a7469' }}>
+                    <span>{conn.duration}s</span>
+                    <span style={{ fontFamily: 'DM Mono', color: '#9e968b' }}>
+                      {conn.total_bytes > 0 ? `${conn.total_bytes} B` : '-'}
+                    </span>
+                  </div>
+
+                  <div>
+                    {conn.detection_status === 'NORMAL' && (
+                      <span className="live-badge-normal">
+                        <ShieldCheck size={11} /> NORMAL
+                      </span>
+                    )}
+                    {conn.detection_status === 'SUSPICIOUS' && (
+                      <span className="live-badge-suspicious">
+                        <AlertCircle size={11} /> SUSPICIOUS
+                      </span>
+                    )}
+                    {conn.detection_status === 'POTENTIAL THREAT' && (
+                      <span className="live-badge-threat">
+                        <AlertCircle size={11} /> THREAT
+                      </span>
+                    )}
+                  </div>
+
+                  <div>
+                    <span className="live-badge-insufficient" title={conn.explanation}>
+                      INSUFFICIENT (13/63)
+                    </span>
+                  </div>
+
+                  <span style={{ color: '#b2aba0' }}>
+                    {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  </span>
+                </div>
+
+                {/* Expanded Details Panel */}
+                {isExpanded && (
+                  <div className="live-expanded-panel">
+                    <div>
+                      <span className="detail-label">Heuristic Observation</span>
+                      <p style={{ margin: '4px 0 10px', color: '#4a443b', fontSize: '12px' }}>
+                        {conn.detection_reason}
+                      </p>
+
+                      <span className="detail-label">Machine Learning Validation</span>
+                      <p style={{ margin: '4px 0 10px', color: '#665f54', fontSize: '11px', lineHeight: 1.5 }}>
+                        {conn.explanation}
+                      </p>
+
+                      <div style={{ display: 'flex', gap: '16px', marginTop: '10px', fontSize: '11px', color: '#70695d' }}>
+                        <span>History: <code>{conn.history || 'none'}</code></span>
+                        <span>Orig Pkts: <strong>{conn.orig_pkts}</strong></span>
+                        <span>Resp Pkts: <strong>{conn.resp_pkts}</strong></span>
+                        <span>Duration: <strong>{conn.duration}s</strong></span>
+                      </div>
+                    </div>
+
+                    <div style={{ borderLeft: '1px solid #ebd8c0', paddingLeft: '16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                      <div>
+                        <span className="detail-label">Zeek Record UID</span>
+                        <code style={{ display: 'block', margin: '4px 0 10px', fontFamily: 'DM Mono', fontSize: '11px', color: '#38342d' }}>
+                          {conn.uid}
+                        </code>
+                        <span className="detail-label">Connection State</span>
+                        <span style={{ display: 'block', fontSize: '11px', color: '#575249', marginTop: '4px' }}>
+                          {conn.conn_state} — {stateExp}
+                        </span>
+                      </div>
+
+                      <button
+                        type="button"
+                        className="button button-secondary"
+                        style={{ marginTop: '12px', fontSize: '11px', justifyContent: 'center' }}
+                        onClick={() => onNavigate('alerts')}
+                      >
+                        <Zap size={13} /> Open ML Workbench
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })
+        )}
+      </section>
+    </>
+  )
 }
 
 // ----------------------------------------------------------------------------

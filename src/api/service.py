@@ -45,6 +45,7 @@ from src.models.registry import (
     ModelNotFoundError,
     ModelRegistry,
 )
+from src.monitoring import get_monitoring_manager
 from src.api.schemas import (
     AlertItem,
     AnomalyEvaluationDetail,
@@ -365,6 +366,9 @@ class IntelligenceService:
         # Load reports and initialize baseline state
         self._load_benchmark_reports()
         self._initialize_demonstration_intelligence()
+
+        # Phase 7: Live Network Monitoring Manager
+        self.monitoring_manager = get_monitoring_manager()
 
     def get_model_status(self) -> Dict[str, Any]:
         """Returns the loaded status and capability metadata of the machine learning models."""
@@ -947,3 +951,46 @@ class IntelligenceService:
             WeekDayData(name="Sat", normal=4410, unusual=520),
             WeekDayData(name="Sun", normal=3560, unusual=340),
         ]
+
+    # -------------------------------------------------------------------------
+    # Live Network Monitoring Handlers (Phase 7)
+    # -------------------------------------------------------------------------
+
+    def get_live_status(self) -> Dict[str, Any]:
+        """Returns live monitoring status, interface diagnostics, and Zeek state."""
+        return self.monitoring_manager.get_status()
+
+    def get_live_connections(
+        self, limit: int = 50, status_filter: Optional[str] = None
+    ) -> Tuple[List[Dict[str, Any]], int, int, str, bool]:
+        """Returns recent live network connections observed by Zeek collector."""
+        connections = self.monitoring_manager.collector.get_connections(
+            limit=limit, status_filter=status_filter
+        )
+        summary = self.monitoring_manager.collector.get_summary()
+        return (
+            connections,
+            summary["total_connections"],
+            len(connections),
+            self.monitoring_manager._active_interface,
+            self.monitoring_manager.is_running,
+        )
+
+    def get_live_summary(self) -> Dict[str, Any]:
+        """Returns aggregated live connection statistics."""
+        summary = self.monitoring_manager.collector.get_summary()
+        summary["interface"] = self.monitoring_manager._active_interface
+        summary["is_monitoring"] = self.monitoring_manager.is_running
+        return summary
+
+    def start_live_monitoring(
+        self, interface: Optional[str] = None, allow_demo_fallback: bool = True
+    ) -> Dict[str, Any]:
+        """Starts live network monitoring on the host."""
+        return self.monitoring_manager.start_monitoring(
+            interface=interface, allow_demo_fallback=allow_demo_fallback
+        )
+
+    def stop_live_monitoring(self) -> Dict[str, Any]:
+        """Stops live network monitoring safely."""
+        return self.monitoring_manager.stop_monitoring()

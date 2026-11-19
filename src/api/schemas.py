@@ -249,3 +249,117 @@ class AnalyzeFlowResponse(BaseModel):
     evaluations: List[FlowEvaluationItem] = Field(default_factory=list, description="Per-flow multi-engine predictions")
     models_used: Dict[str, str] = Field(default_factory=dict, description="Active model artifacts used for inference")
     anomaly_threshold_tier: str = Field(default="fpr_1.0pct", description="Active operating anomaly threshold tier")
+
+
+# -----------------------------------------------------------------------------
+# Live Network Monitoring Models (Phase 7)
+# -----------------------------------------------------------------------------
+
+class NetworkInterfaceInfo(BaseModel):
+    """Network interface details discovered on the host."""
+    name: str
+    ip: str
+    all_ips: List[str] = Field(default_factory=list)
+    is_active: bool
+    is_loopback: bool
+
+
+class LiveStatusResponse(BaseModel):
+    """Operational state of Zeek live network monitoring."""
+    status: str
+    collector_status: str
+    mode: str
+    interface: str
+    available_interfaces: List[NetworkInterfaceInfo] = Field(default_factory=list)
+    zeek_installed: bool
+    zeek_path: Optional[str] = None
+    zeek_version: Optional[str] = None
+    bpf_permission: bool
+    permission_instruction: Optional[str] = None
+    total_connections: int = 0
+    latest_event_timestamp: Optional[float] = None
+    error_message: Optional[str] = None
+    log_path: Optional[str] = None
+    is_live_telemetry: bool = True
+
+
+class LiveConnectionItem(BaseModel):
+    """Normalized connection record observed from Zeek."""
+    uid: str
+    timestamp: str
+    iso_time: str
+    ts: float
+    src_ip: str
+    src_port: int
+    dst_ip: str
+    dst_port: int
+    proto: str
+    service: Optional[str] = None
+    duration: float = 0.0
+    orig_bytes: int = 0
+    resp_bytes: int = 0
+    total_bytes: int = 0
+    orig_pkts: int = 0
+    resp_pkts: int = 0
+    conn_state: str
+    history: Optional[str] = None
+    detection_status: str
+    detection_severity: str
+    detection_reason: str
+    ml_evaluated: bool = False
+    ml_status: str = "INSUFFICIENT_FEATURES"
+    missing_features_count: int = 63
+    explanation: str
+
+
+class LiveConnectionsResponse(BaseModel):
+    """Response containing observed live network connections."""
+    connections: List[LiveConnectionItem]
+    total_count: int
+    returned_count: int
+    interface: str
+    is_monitoring: bool
+
+
+class PortCountItem(BaseModel):
+    """Destination port observation count."""
+    port: int
+    count: int
+
+
+class LiveSummaryResponse(BaseModel):
+    """Aggregated live traffic observation statistics."""
+    total_connections: int
+    protocol_distribution: Dict[str, int]
+    status_distribution: Dict[str, int]
+    top_destination_ports: List[PortCountItem]
+    latest_timestamp: Optional[float] = None
+    malformed_records_count: int = 0
+    buffered_records_count: int = 0
+    interface: str
+    is_monitoring: bool
+
+
+class LiveStartRequest(BaseModel):
+    """Request payload to initiate live network observation."""
+    interface: Optional[str] = Field(default=None, description="Network interface, e.g. en0 or lo0")
+    allow_demo_fallback: bool = Field(default=True, description="Fallback to safe local telemetry if macOS BPF permissions denied")
+
+
+class LiveStartResponse(BaseModel):
+    """Response confirming live monitoring launch."""
+    status: str
+    interface: str
+    mode: str = "live_pcap"
+    bpf_permission: bool = True
+    permission_instruction: Optional[str] = None
+    message: str
+
+
+class LiveStopResponse(BaseModel):
+    """Response confirming live monitoring shutdown."""
+    status: str
+    interface: str
+    was_running: bool
+    message: str
+    total_connections: int

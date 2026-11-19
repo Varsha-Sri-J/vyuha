@@ -238,6 +238,32 @@ Evaluates one or more 63-feature network flow vectors on demand through genuine 
     ```
   - `503 Service Unavailable`: Raised on `ModelLoadError` if model artifacts cannot be loaded from disk or are corrupted.
 
+### 4.10 `GET /api/live/status` (Phase 7)
+Returns Zeek installation details, collector state, active interface, and macOS BPF permissions.
+* **Status**: `200 OK`
+* **Response Model**: `LiveStatusResponse`
+* **Key Fields**: `status`, `collector_status`, `mode`, `interface`, `available_interfaces`, `zeek_installed`, `zeek_path`, `zeek_version`, `bpf_permission`, `permission_instruction`, `total_connections`, `latest_event_timestamp`.
+
+### 4.11 `GET /api/live/connections` (Phase 7)
+Returns recently observed connection records with pagination and status filtering.
+* **Query Parameters**: `limit: int = 50`, `status: Optional[str]`
+* **Response Model**: `LiveConnectionsResponse`
+* **Key Fields**: `connections` (list of `LiveConnectionItem` with `src_ip`, `dst_ip`, `src_port`, `dst_port`, `proto`, `service`, `duration`, `orig_bytes`, `resp_bytes`, `conn_state`, `detection_status`, `ml_status`), `total_count`, `returned_count`, `interface`.
+
+### 4.12 `GET /api/live/summary` (Phase 7)
+Returns aggregated protocol distribution, top destination ports, and status counts.
+* **Response Model**: `LiveSummaryResponse`
+* **Key Fields**: `total_connections`, `protocol_distribution`, `status_distribution`, `top_destination_ports`, `latest_timestamp`.
+
+### 4.13 `POST /api/live/start` (Phase 7)
+Starts live packet capture via Zeek on the host.
+* **Request Model**: `LiveStartRequest` (`interface: Optional[str]`, `allow_demo_fallback: bool = true`)
+* **Response Model**: `LiveStartResponse` (`status`, `interface`, `mode`, `bpf_permission`, `permission_instruction`, `message`).
+
+### 4.14 `POST /api/live/stop` (Phase 7)
+Stops Zeek subprocess execution safely.
+* **Response Model**: `LiveStopResponse` (`status`, `interface`, `was_running`, `message`, `total_connections`).
+
 ---
 
 ## 5. Frontend Integration & View Mapping
@@ -245,6 +271,7 @@ Evaluates one or more 63-feature network flow vectors on demand through genuine 
 | Route / View | Frontend Component | API Endpoint | Dynamic Elements Bound |
 |---|---|---|---|
 | `/` or `/overview` | `Overview` | `GET /api/overview` | Posture status pill, flow counters, diurnal SVG area chart, attention cards, recent alerts table |
+| `/live` | `LiveMonitoring` | `GET /api/live/status`<br>`GET /api/live/connections`<br>`GET /api/live/summary`<br>`POST /api/live/start`<br>`POST /api/live/stop` | Real-time connection table, auto-polling (2.5s), Start/Stop controls, capture interface selector, BPF permission banner, protocol breakdown, heuristic observation badges (NORMAL, SUSPICIOUS, THREAT), transparent ML constraint callout |
 | `/activity` | `NetworkActivity` | `GET /api/network-activity` | Flow summary cards, diurnal volume chart, weekly bar chart, traffic moment cards |
 | `/alerts` | `SecurityAlerts` | `GET /api/alerts` | Search bar, severity filter pills, alert count, expandable alert rows with multi-engine evidence, "Test ML Inference" launcher |
 | `/workbench` | `FlowInferenceWorkbench` | `GET /api/analyze-flow/presets`<br>`POST /api/analyze-flow` | 4 Preset selector cards (Benign, PortScan, DoS, Novelty Anomaly), calibrated FPR threshold selector, 63-feature inspection, live multi-engine consensus badge, probability distribution gauges, one-click jump to candidate incident details |
@@ -256,9 +283,21 @@ Evaluates one or more 63-feature network flow vectors on demand through genuine 
 
 ## 6. Verification and Test Suite
 
-The integration is verified by 117 automated backend tests and production frontend bundling:
+The integration is verified by 135 automated backend tests and production frontend bundling:
 
-1. **Backend Automated Tests** (`vyuha/tests/` — 117 tests passing):
+1. **Backend Automated Tests** (`vyuha/tests/` — 135 tests passing):
+   * **Live Monitoring Tests** (`tests/test_live_monitoring.py` — 18 tests):
+     - Zeek installation and version detection.
+     - macOS BPF permission check and copyable instructions.
+     - Host network interface auto-discovery (`lo0`, `en0`).
+     - Strict 63-feature validation (`INSUFFICIENT_FEATURES` rejection).
+     - Heuristic classification rules (NORMAL, SUSPICIOUS, POTENTIAL THREAT).
+     - JSON and TSV log parsing.
+     - Non-blocking incremental tailing with file offset tracking.
+     - Duplicate prevention using Zeek connection `uid`.
+     - Malformed log line safety.
+     - Process manager startup/shutdown lifecycle.
+     - Live REST endpoints (`/api/live/*`).
    * **API Integration Tests** (`tests/test_api.py`):
      - Health check provenance and model status validation (`models_loaded: true`).
      - Overview payload consistency, diurnal activity, and attention item contract.
@@ -275,7 +314,7 @@ The integration is verified by 117 automated backend tests and production fronte
      - Strict HTTP 422 enforcement on incomplete feature vectors.
      - Strict HTTP 503 error handling on missing or corrupt model artifacts.
    * **Phase 1–4 Core Tests**:
-     - 94 unit and integration tests covering alert normalization, sliding-window temporal correlation, target graph clustering, and dataset transforms.
+     - 81 unit and integration tests covering alert normalization, sliding-window temporal correlation, target graph clustering, and dataset transforms.
 2. **Frontend Production Build**:
    ```bash
    cd frontend && npm run build

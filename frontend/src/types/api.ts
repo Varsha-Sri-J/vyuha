@@ -6,7 +6,7 @@
  * the Manus editorial UI design system.
  */
 
-export type Page = 'overview' | 'activity' | 'alerts' | 'incidents' | 'details' | 'insights'
+export type Page = 'overview' | 'activity' | 'alerts' | 'incidents' | 'details' | 'insights' | 'live'
 
 export type Severity = 'High' | 'Medium' | 'Low'
 
@@ -236,4 +236,109 @@ export interface FlowPresetItem {
 
 export interface FlowPresetsResponse {
   presets: Record<string, FlowPresetItem>
+}
+
+// ----------------------------------------------------------------------------
+// Live Network Monitoring Types (Phase 7)
+// ----------------------------------------------------------------------------
+
+export interface NetworkInterfaceInfo {
+  name: string
+  ip: string
+  all_ips: string[]
+  is_active: boolean
+  is_loopback: boolean
+}
+
+export interface LiveStatusResponse {
+  status: 'RUNNING' | 'STOPPED' | string
+  collector_status: 'RUNNING' | 'STOPPED' | string
+  mode: 'live_pcap' | 'demonstration_stream' | 'idle' | string
+  interface: string
+  available_interfaces: NetworkInterfaceInfo[]
+  zeek_installed: boolean
+  zeek_path?: string | null
+  zeek_version?: string | null
+  bpf_permission: boolean
+  permission_instruction?: string | null
+  total_connections: number
+  latest_event_timestamp?: number | null
+  error_message?: string | null
+  log_path?: string | null
+  is_live_telemetry: boolean
+}
+
+export interface LiveConnectionItem {
+  uid: string
+  timestamp: string
+  iso_time: string
+  ts: number
+  src_ip: string
+  src_port: number
+  dst_ip: string
+  dst_port: number
+  proto: string
+  service?: string | null
+  duration: number
+  orig_bytes: number
+  resp_bytes: number
+  total_bytes: number
+  orig_pkts: number
+  resp_pkts: number
+  conn_state: string
+  history?: string | null
+  detection_status: 'NORMAL' | 'SUSPICIOUS' | 'POTENTIAL THREAT' | 'INSUFFICIENT_FEATURES' | string
+  detection_severity: 'INFO' | 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | string
+  detection_reason: string
+  ml_evaluated: boolean
+  ml_status: string
+  missing_features_count: number
+  explanation: string
+}
+
+export interface LiveConnectionsResponse {
+  connections: LiveConnectionItem[]
+  total_count: number
+  returned_count: number
+  interface: string
+  is_monitoring: boolean
+}
+
+export interface PortCountItem {
+  port: number
+  count: number
+}
+
+export interface LiveSummaryResponse {
+  total_connections: number
+  protocol_distribution: Record<string, number>
+  status_distribution: Record<string, number>
+  top_destination_ports: PortCountItem[]
+  latest_timestamp?: number | null
+  malformed_records_count: number
+  buffered_records_count: number
+  interface: string
+  is_monitoring: boolean
+}
+
+export interface LiveStartRequest {
+  interface?: string | null
+  allow_demo_fallback?: boolean
+}
+
+export interface LiveStartResponse {
+  status: string
+  interface: string
+  mode: string
+  bpf_permission: boolean
+  permission_instruction?: string | null
+  message: string
+}
+
+export interface LiveStopResponse {
+  status: string
+  interface: string
+  was_running: boolean
+  message: string
+  total_connections: number
 }

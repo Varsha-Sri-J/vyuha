@@ -86,6 +86,10 @@ coverage.xml
 .pytest_cache/
 cover/
 
+# Runtime / Live Monitoring
+runtime/
+*.log
+
 # Node / Frontend
 node_modules
 node_modules/

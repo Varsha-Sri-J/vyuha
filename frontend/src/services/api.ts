@@ -16,6 +16,11 @@ import type {
   Incident,
   IncidentsData,
   InsightsData,
+  LiveConnectionsResponse,
+  LiveStartResponse,
+  LiveStatusResponse,
+  LiveStopResponse,
+  LiveSummaryResponse,
   NetworkActivityData,
   OverviewData,
   SecurityAlertsData,
@@ -123,5 +128,48 @@ export async function analyzeFlows(
       alert_on_threat_only: alertOnThreatOnly,
       anomaly_threshold_tier: anomalyThresholdTier,
     }),
+  })
+}
+
+// ----------------------------------------------------------------------------
+// Live Network Monitoring (Phase 7)
+// ----------------------------------------------------------------------------
+
+export async function getLiveStatus(): Promise<LiveStatusResponse> {
+  return request<LiveStatusResponse>('/api/live/status')
+}
+
+export async function getLiveConnections(
+  limit = 50,
+  status?: string,
+): Promise<LiveConnectionsResponse> {
+  const params = new URLSearchParams()
+  params.set('limit', String(limit))
+  if (status && status !== 'ALL') {
+    params.set('status', status)
+  }
+  return request<LiveConnectionsResponse>(`/api/live/connections?${params.toString()}`)
+}
+
+export async function getLiveSummary(): Promise<LiveSummaryResponse> {
+  return request<LiveSummaryResponse>('/api/live/summary')
+}
+
+export async function startLiveMonitoring(
+  interfaceName?: string,
+  allowDemoFallback = true,
+): Promise<LiveStartResponse> {
+  return request<LiveStartResponse>('/api/live/start', {
+    method: 'POST',
+    body: JSON.stringify({
+      interface: interfaceName || null,
+      allow_demo_fallback: allowDemoFallback,
+    }),
+  })
+}
+
+export async function stopLiveMonitoring(): Promise<LiveStopResponse> {
+  return request<LiveStopResponse>('/api/live/stop', {
+    method: 'POST',
   })
 }
