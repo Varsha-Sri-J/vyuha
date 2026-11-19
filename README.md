@@ -169,15 +169,83 @@ The dataset has undergone an initial inspection and data-quality audit. The raw 
 
 | Phase | Description | Status |
 | :--- | :--- | :--- |
-| **Phase 1** | Project setup and environment verification | Completed |
-| **Phase 2** | CICIDS2017 dataset inspection and audit | Completed |
-| **Phase 3** | Data preprocessing and feature engineering | Planned |
-| **Phase 4** | Machine learning detection engine | Planned |
-| **Phase 5** | Network behaviour and traffic analysis | Planned |
-| **Phase 6** | Alert generation and correlation | Planned |
-| **Phase 7** | Campaign intelligence and explainability | Planned |
-| **Phase 8** | SOC dashboard development | Planned |
-| **Phase 9** | Dataset replay and demonstration | Planned |
+| **Phase 1** | Project setup, environment verification & CICIDS2017 dataset audit | Completed |
+| **Phase 2** | Feature selection (63 features) and data preprocessing pipeline | Completed |
+| **Phase 3** | Supervised (Binary/Multiclass RF) & Unsupervised (Isolation Forest) models | Completed |
+| **Phase 4** | Alert normalization, temporal correlation & candidate incident grouping | Completed |
+| **Phase 5** | FastAPI REST API backend & React editorial security dashboard integration | Completed |
+| **Phase 6** | Genuine on-demand machine learning inference engine & interactive workbench | Completed |
+| **Phase 7** | Live network monitoring & telemetry ingestion exploration | Planned (Next Milestone) |
+| **Phase 8** | Industrial protocol expansion (Modbus, DNP3, OPC-UA telemetry) | Planned |
+| **Phase 9** | Automated response playbooks & incident remediation workflows | Planned |
+
+---
+
+## Setup & Startup Guide
+
+### Prerequisites
+* **Python**: 3.9+ (Python 3.11 recommended)
+* **Node.js**: 18+ and `npm`
+
+### 1. Backend Setup & Startup
+```bash
+# Navigate to repository root
+cd vyuha
+
+# Create and activate Python virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install backend dependencies
+pip install -r requirements.txt
+
+# Start the FastAPI backend service (port 8000)
+uvicorn src.api.app:app --host 127.0.0.1 --port 8000 --reload
+```
+* **API Documentation & Swagger UI**: `http://127.0.0.1:8000/docs`
+* **Health Check**: `http://127.0.0.1:8000/api/health`
+
+### 2. Frontend Setup & Startup
+```bash
+# Navigate to the frontend directory
+cd vyuha/frontend
+
+# Install frontend dependencies
+npm install
+
+# Start the Vite development server (port 3000, proxies /api requests to 8000)
+npm run dev
+```
+* **Security Dashboard**: Access `http://localhost:3000`
+* **ML Inference Workbench**: Accessible directly in the UI via the **Security Alerts** page or `/workbench`
+
+### 3. Verification & Testing
+
+#### Run Backend Test Suite
+```bash
+# Run all 117 automated unit and integration tests
+pytest tests/
+```
+
+#### Run Frontend Production Build
+```bash
+# Verify TypeScript types and compile production bundle
+cd frontend && npm run build
+```
+
+---
+
+## Next Milestone: Live Network Monitoring Exploration (Phase 7)
+
+The next planned development phase (**Phase 7**) explores options for extending VYUHA from offline benchmark replay and on-demand flow evaluation toward **live network monitoring**.
+
+### Technical Scope & Constraints
+* **Zeek Telemetry vs Model Feature Requirements**: Standard Zeek `conn.log` provides basic connection metadata (IP addresses, ports, transport protocol, duration, byte and packet counts). However, `conn.log` **does not** provide the complete 63 statistical flow features (such as packet length distributions, inter-arrival time statistics, TCP flag counts, window parameters, and subflow rates) required by VYUHA's current scikit-learn models.
+* **Strict Feature Completeness Requirement**: The existing Phase 6 models strictly require the full 63-feature schema. Incomplete or unsupported feature sets will fail validation (`IncompleteFlowError`, HTTP 422) and **must not** be passed to the existing models.
+* **Planned Research & Implementation**:
+  * Investigate deep flow extraction tools (e.g., custom Zeek scripts, specialized packet analyzers, or flow exporters like `CICFlowMeter` / `GoFlow2`) to determine whether the required 63 statistical features can be computed reliably from live SPAN/mirror traffic.
+  * Alternatively, investigate training dedicated lightweight models tailored specifically to native Zeek connection fields (`conn.log`).
+  * If feature parity or dedicated models are successfully developed, evaluate integrating live flow evaluation with the Phase 4 temporal correlation graph.
 
 ---
 
@@ -190,21 +258,35 @@ vyuha/
 ├── requirements.txt
 ├── .gitignore
 │
-├── notebooks/
+├── docs/                     # Engineering specifications & phase audit reports
+│   ├── api-integration.md
+│   ├── ml-inference.md
+│   ├── incident-intelligence.md
+│   └── ...
+│
+├── models/                   # Trained scikit-learn model artifacts (untracked)
+│   ├── rf_full.joblib
+│   ├── multiclass_rf_full.joblib
+│   └── iforest_full_100k.joblib
 │
 ├── src/
-│   ├── data/
-│   ├── models/
-│   ├── analysis/
-│   ├── correlation/
-│   ├── explainability/
-│   └── api/
+│   ├── api/                  # FastAPI routes, Pydantic schemas, and service layer
+│   ├── models/               # ModelRegistry, FlowPreprocessor, and InferenceEngine
+│   ├── intelligence/         # Canonical alert normalization & temporal correlation
+│   └── preprocessing/        # 63-feature selection & pipeline transforms
 │
-├── tests/
+├── tests/                    # 117 automated pytest unit and integration tests
+│   ├── test_api.py
+│   ├── test_ml_inference.py
+│   └── ...
 │
-├── docs/
-│
-└── frontend/
+└── frontend/                 # React + TypeScript + Vite + Tailwind CSS dashboard
+    ├── src/
+    │   ├── App.tsx           # Dashboard view state & ML Inference Workbench
+    │   ├── services/         # API client & offline preset fallbacks
+    │   └── types/            # TypeScript schemas matching backend Pydantic models
+    ├── package.json
+    └── vite.config.ts
 ```
 
 ---
@@ -224,12 +306,19 @@ vyuha/
 
 ## Current Development Status
 
-* [x] Project workspace established.
+* [x] Project workspace established and monorepo structure configured.
 * [x] GitHub repository initialized.
 * [x] Python virtual environment configured.
 * [x] CICIDS2017 dataset verified and inspected.
 * [x] Empirical dataset intelligence & quality audit completed (2.83M rows, 78 features).
-* [ ] Preprocessing and machine learning implementation (Upcoming Milestone).
+* [x] Preprocessing and 63-feature selection pipeline implemented.
+* [x] Supervised binary intrusion detector (Random Forest, F1 = 0.9991) trained and validated.
+* [x] Supervised multiclass attack classifier (Random Forest, 8 classes, Macro F1 = 0.8872) trained.
+* [x] Unsupervised anomaly detector (Isolation Forest on 100k benign baseline flows, ROC-AUC = 0.8023) calibrated.
+* [x] Phase 4 alert normalization, sliding-window temporal correlation, and target graph clustering completed.
+* [x] Phase 5 FastAPI backend and editorial React dashboard integrated.
+* [x] Phase 6 genuine machine learning inference engine implemented with `ModelRegistry`, 63-feature schema validation, multi-engine consensus, calibrated presets, and interactive frontend workbench.
+* [ ] Phase 7 live network monitoring and telemetry ingestion exploration (Upcoming Milestone).
 
 ---
 

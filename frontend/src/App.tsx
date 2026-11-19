@@ -20,6 +20,7 @@ import {
   Network,
   PanelLeftClose,
   PanelLeftOpen,
+  Play,
   RefreshCw,
   Search,
   ShieldCheck,
@@ -49,8 +50,10 @@ import {
 
 import type {
   AlertItem,
+  AnalyzeFlowResponse,
   AttentionItemData,
   Confidence,
+  FlowPresetItem,
   FlowTotals,
   Incident,
   IncidentEvidenceItem,
@@ -67,14 +70,17 @@ import type {
   WeekDayData,
 } from './types/api'
 import {
+  analyzeFlows,
   checkApiHealth,
   getAlerts,
+  getFlowPresets,
   getIncidentDetails,
   getIncidents,
   getInsights,
   getNetworkActivity,
   getOverview,
 } from './services/api'
+import { initialFlowPresets } from './services/presets'
 
 // ----------------------------------------------------------------------------
 // Offline Fallback Baseline Constants (Shown only if backend is unreachable)
@@ -373,6 +379,10 @@ function App() {
                 getAlerts(q, sev)
                   .then(setAlertsData)
                   .catch(() => {})
+              }}
+              onSelectIncident={(id) => {
+                setSelectedIncident(id)
+                navigate('details')
               }}
             />
           )}
@@ -947,17 +957,454 @@ function MomentItem({ time, title, copy }: { time: string; title: string; copy: 
 }
 
 // ----------------------------------------------------------------------------
-// 3. Security Alerts Page
+// 3. Security Alerts Page & On-Demand ML Flow Inference Workbench
 // ----------------------------------------------------------------------------
+
+function FlowInferenceWorkbench({
+  onSelectIncident,
+}: {
+  onSelectIncident?: (id: string) => void
+}) {
+  const [presets, setPresets] = useState<Record<string, FlowPresetItem>>(initialFlowPresets)
+  const [presetsLoading, setPresetsLoading] = useState<boolean>(true)
+  const [presetsError, setPresetsError] = useState<string | null>(null)
+  const [selectedPresetKey, setSelectedPresetKey] = useState<string>('portscan')
+  const [tier, setTier] = useState<string>('fpr_1.0pct')
+  const [threatOnly, setThreatOnly] = useState<boolean>(false)
+  const [evaluating, setEvaluating] = useState<boolean>(false)
+  const [result, setResult] = useState<AnalyzeFlowResponse | null>(null)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  const loadPresets = useCallback(async () => {
+    setPresetsLoading(true)
+    setPresetsError(null)
+    try {
+      const res = await getFlowPresets()
+      if (res && res.presets && Object.keys(res.presets).length > 0) {
+        setPresets(res.presets)
+      } else {
+        throw new Error('Presets response contained empty or invalid payload.')
+      }
+    } catch (err: any) {
+      console.warn('Could not fetch flow presets from API, using baseline presets:', err)
+      setPresetsError(err.message || 'Could not connect to presets endpoint.')
+    } finally {
+      setPresetsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadPresets()
+  }, [loadPresets])
+
+  const handleRunInference = async (presetKeyToUse?: string) => {
+    const key = presetKeyToUse || selectedPresetKey
+    const activePreset = presets[key] || initialFlowPresets[key]
+    if (!activePreset || !activePreset.flow) {
+      setErrorMsg(`Selected preset '${key}' is not available. Please retry loading presets.`)
+      return
+    }
+    setEvaluating(true)
+    setErrorMsg(null)
+    try {
+      const res = await analyzeFlows([activePreset.flow], threatOnly, tier)
+      setResult(res)
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Inference execution failed')
+    } finally {
+      setEvaluating(false)
+    }
+  }
+
+  // Pre-evaluate default preset once on mount
+  useEffect(() => {
+    if (!result && !evaluating && !errorMsg) {
+      handleRunInference(selectedPresetKey)
+    }
+  }, [])
+
+  const evaluation = result?.evaluations?.[0]
+  const currentPresetAvailable = Boolean(presets[selectedPresetKey] || initialFlowPresets[selectedPresetKey])
+
+  return (
+    <div className="ml-workbench-card">
+      <div className="ml-workbench-header">
+        <div className="ml-workbench-title">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Zap size={18} style={{ color: 'var(--sage-dark)' }} />
+            <h3>On-Demand ML Threat Detection</h3>
+          </div>
+          <p>
+            Evaluate network flow feature vectors across trained Binary Random Forest, Multiclass Classifier, and Isolation Forest models with consensus fusion.
+          </p>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {presetsLoading && (
+            <span className="loading-badge">
+              <RefreshCw size={11} className="animate-spin" /> Fetching Presets...
+            </span>
+          )}
+          <span className="ml-provenance-badge">
+            <Sparkles size={13} /> Genuine Model Inference
+          </span>
+        </div>
+      </div>
+
+      {presetsError && (
+        <div
+          style={{
+            marginTop: '12px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '8px 12px',
+            borderRadius: '8px',
+            background: '#faf6ed',
+            border: '1px solid #ebdcc5',
+            color: '#8c764e',
+            fontSize: '10px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Info size={14} />
+            <span>Using verified baseline presets ({presetsError})</span>
+          </div>
+          <button
+            type="button"
+            className="retry-button"
+            onClick={loadPresets}
+            disabled={presetsLoading}
+          >
+            <RefreshCw size={11} className={presetsLoading ? 'animate-spin' : ''} /> Retry API
+          </button>
+        </div>
+      )}
+
+      <div className="ml-preset-section">
+        <span className="ml-section-eyebrow">Select Network Flow Preset (63 Features)</span>
+        <div className="preset-grid">
+          {[
+            {
+              key: 'benign',
+              label: 'Benign Web',
+              badge: 'BENIGN',
+              port: '443 (HTTPS)',
+              desc: 'Standard HTTPS TLS flow on port 443 with balanced payload and TCP windows.',
+            },
+            {
+              key: 'portscan',
+              label: 'Stealth SYN Probe',
+              badge: 'PortScan',
+              port: '22 (SSH)',
+              desc: 'Single-packet SYN probe targeting port 22 with zero duration.',
+            },
+            {
+              key: 'dos',
+              label: 'Volumetric DoS',
+              badge: 'DoS_DDoS',
+              port: '80 (HTTP)',
+              desc: 'High-volume HTTP flood targeting port 80 with compressed inter-arrivals.',
+            },
+            {
+              key: 'anomaly',
+              label: 'Distribution Novelty',
+              badge: 'ANOMALY',
+              port: '8088 (Custom)',
+              desc: 'Rare TCP flag profile (URG/CWE/ECE) and abnormal payload ratio.',
+            },
+          ].map((item) => {
+            const isSelected = selectedPresetKey === item.key
+            return (
+              <button
+                key={item.key}
+                type="button"
+                className={`preset-button ${isSelected ? 'preset-button-selected' : ''}`}
+                onClick={() => {
+                  setSelectedPresetKey(item.key)
+                  handleRunInference(item.key)
+                }}
+              >
+                <div className="preset-top">
+                  <span className="preset-name">{item.label}</span>
+                  <span className="keycap" style={{ fontSize: '8px' }}>{item.badge}</span>
+                </div>
+                <span className="preset-desc">{item.desc}</span>
+                <span style={{ fontSize: '8px', fontFamily: 'DM Mono, monospace', color: '#888', marginTop: '4px' }}>
+                  Target: {item.port}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="ml-controls-bar">
+        <div className="tier-selector">
+          <span>Anomaly Sensitivity:</span>
+          <div className="tier-pills">
+            {[
+              { id: 'fpr_1.0pct', label: '1.0% FPR (Standard)' },
+              { id: 'fpr_5.0pct', label: '5.0% FPR (Sensitive)' },
+              { id: 'fpr_0.50pct', label: '0.5% FPR (Conservative)' },
+              { id: 'fpr_0.10pct', label: '0.1% FPR (Strict)' },
+            ].map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                className={`tier-pill ${tier === t.id ? 'tier-pill-active' : ''}`}
+                onClick={() => setTier(t.id)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="ml-action-group">
+          <label className="threat-only-toggle">
+            <input
+              type="checkbox"
+              checked={threatOnly}
+              onChange={(e) => setThreatOnly(e.target.checked)}
+            />
+            <span>Alert on confirmed threats only</span>
+          </label>
+          <button
+            type="button"
+            className="button button-dark button-small"
+            onClick={() => handleRunInference(selectedPresetKey)}
+            disabled={evaluating || presetsLoading || !currentPresetAvailable}
+          >
+            {evaluating ? (
+              <>
+                <RefreshCw size={13} className="animate-spin" /> Evaluating Models...
+              </>
+            ) : presetsLoading ? (
+              <>
+                <RefreshCw size={13} className="animate-spin" /> Loading Presets...
+              </>
+            ) : (
+              <>
+                <Play size={13} /> Run ML Inference
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {errorMsg && (
+        <div
+          style={{
+            marginTop: '14px',
+            padding: '10px 14px',
+            borderRadius: '8px',
+            background: '#faede8',
+            border: '1px solid #f0ddd6',
+            color: '#b05c46',
+            fontSize: '10px',
+          }}
+        >
+          <strong>Inference Error:</strong> {errorMsg}
+        </div>
+      )}
+
+      {evaluation && (
+        <div className="ml-evaluations-container">
+          {/* Consensus Banner */}
+          <div
+            className={`consensus-banner ${
+              evaluation.consensus_status === 'CORROBORATED_ATTACK'
+                ? 'consensus-banner-attack'
+                : evaluation.consensus_status === 'SUPERVISED_CONFLICT'
+                ? 'consensus-banner-conflict'
+                : evaluation.consensus_status === 'NOVEL_ANOMALY'
+                ? 'consensus-banner-anomaly'
+                : 'consensus-banner-benign'
+            }`}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              {evaluation.consensus_status === 'CORROBORATED_ATTACK' && <AlertCircle size={20} />}
+              {evaluation.consensus_status === 'SUPERVISED_CONFLICT' && <Zap size={20} />}
+              {evaluation.consensus_status === 'NOVEL_ANOMALY' && <Eye size={20} />}
+              {evaluation.consensus_status === 'CORROBORATED_BENIGN' && <ShieldCheck size={20} />}
+              <div className="consensus-copy">
+                <strong>
+                  {evaluation.consensus_status === 'CORROBORATED_ATTACK' &&
+                    'Corroborated Attack — Confirmed by Supervised and Anomaly Detectors'}
+                  {evaluation.consensus_status === 'SUPERVISED_CONFLICT' &&
+                    'Supervised Conflict — Supervised Attack Detected, Isolation Profile Normal'}
+                  {evaluation.consensus_status === 'NOVEL_ANOMALY' &&
+                    'Novel Anomaly — Statistical Outlier with Benign Supervised Profile'}
+                  {evaluation.consensus_status === 'CORROBORATED_BENIGN' &&
+                    'Corroborated Benign — Normal Traffic Across All Models'}
+                </strong>
+                <span>{evaluation.flow_summary}</span>
+              </div>
+            </div>
+            <span className="consensus-badge-pill">{evaluation.consensus_status}</span>
+          </div>
+
+          {/* 3 Model Diagnostic Cards */}
+          <div className="model-results-grid">
+            {/* Binary RF Card */}
+            <div className="model-card">
+              <div className="model-card-head">
+                <span className="model-card-eyebrow">Engine 1 / Binary RF</span>
+                <span
+                  className={`keycap ${evaluation.binary.is_attack ? 'severity-high' : 'severity-low'}`}
+                  style={{ fontSize: '8px' }}
+                >
+                  {evaluation.binary.is_attack ? 'ATTACK' : 'BENIGN'}
+                </span>
+              </div>
+              <div className="model-verdict-row">
+                <span className="model-verdict">{evaluation.binary.is_attack ? 'Malicious' : 'Benign'}</span>
+                <span className="model-metric-val">{(evaluation.binary.attack_probability * 100).toFixed(1)}% prob</span>
+              </div>
+              <div className="prob-track">
+                <div
+                  className={evaluation.binary.is_attack ? 'prob-fill-attack' : 'prob-fill-benign'}
+                  style={{
+                    width: `${Math.min(100, Math.max(4, evaluation.binary.attack_probability * 100))}%`,
+                  }}
+                />
+              </div>
+              <div className="model-meta-table">
+                <div className="model-meta-row">
+                  <span>Confidence:</span>
+                  <strong>{(evaluation.binary.confidence * 100).toFixed(1)}%</strong>
+                </div>
+                <div className="model-meta-row">
+                  <span>Decision Threshold:</span>
+                  <strong>{evaluation.binary.decision_threshold.toFixed(2)}</strong>
+                </div>
+                <div className="model-meta-row">
+                  <span>Artifact:</span>
+                  <code>rf_full.joblib</code>
+                </div>
+              </div>
+            </div>
+
+            {/* Multiclass RF Card */}
+            <div className="model-card">
+              <div className="model-card-head">
+                <span className="model-card-eyebrow">Engine 2 / Multiclass RF</span>
+                <span className="keycap" style={{ fontSize: '8px' }}>8 Classes</span>
+              </div>
+              <div className="model-verdict-row">
+                <span className="model-verdict">{evaluation.multiclass.predicted_category}</span>
+                <span className="model-metric-val">{(evaluation.multiclass.confidence * 100).toFixed(1)}% conf</span>
+              </div>
+              <div className="prob-track">
+                <div
+                  className={
+                    evaluation.multiclass.predicted_category === 'BENIGN' ? 'prob-fill-benign' : 'prob-fill-attack'
+                  }
+                  style={{
+                    width: `${Math.min(100, Math.max(4, evaluation.multiclass.confidence * 100))}%`,
+                  }}
+                />
+              </div>
+              <div className="model-meta-table">
+                <div className="model-meta-row">
+                  <span>Predicted Category:</span>
+                  <strong>{evaluation.multiclass.predicted_category}</strong>
+                </div>
+                <div className="model-meta-row">
+                  <span>Target Port:</span>
+                  <strong>{evaluation.destination_port ? `Port ${evaluation.destination_port}` : 'None'}</strong>
+                </div>
+                <div className="model-meta-row">
+                  <span>Artifact:</span>
+                  <code>multiclass_rf_full.joblib</code>
+                </div>
+              </div>
+            </div>
+
+            {/* Isolation Forest Card */}
+            <div className="model-card">
+              <div className="model-card-head">
+                <span className="model-card-eyebrow">Engine 3 / Isolation Forest</span>
+                <span
+                  className={`keycap ${evaluation.anomaly.is_anomaly ? 'severity-high' : 'severity-low'}`}
+                  style={{ fontSize: '8px' }}
+                >
+                  {evaluation.anomaly.is_anomaly ? 'NOVELTY' : 'IN-BOUNDS'}
+                </span>
+              </div>
+              <div className="model-verdict-row">
+                <span className="model-verdict">{evaluation.anomaly.is_anomaly ? 'Outlier' : 'Baseline'}</span>
+                <span className="model-metric-val">Score {evaluation.anomaly.anomaly_score.toFixed(4)}</span>
+              </div>
+              <div className="prob-track">
+                <div
+                  className="prob-fill-anomaly"
+                  style={{
+                    width: `${Math.min(100, Math.max(4, evaluation.anomaly.anomaly_score * 100))}%`,
+                  }}
+                />
+              </div>
+              <div className="model-meta-table">
+                <div className="model-meta-row">
+                  <span>Threshold ({evaluation.anomaly.threshold_tier}):</span>
+                  <strong>{evaluation.anomaly.threshold.toFixed(4)}</strong>
+                </div>
+                <div className="model-meta-row">
+                  <span>Threshold Crossed:</span>
+                  <strong>{evaluation.anomaly.is_anomaly ? 'Yes (Anomalous)' : 'No (Within Boundary)'}</strong>
+                </div>
+                <div className="model-meta-row">
+                  <span>Artifact:</span>
+                  <code>iforest_full_100k.joblib</code>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Incident Generated Link Box */}
+          {result && result.incidents && result.incidents.length > 0 && (
+            <div className="incident-link-box">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Target size={16} style={{ color: 'var(--terracotta)' }} />
+                <div>
+                  <strong>Candidate Incident Generated: {result.incidents[0].id}</strong> —{' '}
+                  <span>{result.incidents[0].title} ({result.incidents[0].severity} Severity)</span>
+                </div>
+              </div>
+              {onSelectIncident && (
+                <button
+                  type="button"
+                  className="button button-secondary button-small"
+                  onClick={() => onSelectIncident(result.incidents[0].id)}
+                >
+                  Inspect Incident Details <ArrowUpRight size={13} />
+                </button>
+              )}
+            </div>
+          )}
+
+          <div className="ml-workbench-footer">
+            <span>
+              Inference executed on-demand across 3 genuine scikit-learn models loaded into memory via <code>ModelRegistry</code>.
+            </span>
+            <span>Evaluated Flows: {result?.evaluated_flows_count || 1}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 function SecurityAlerts({
   data,
   loading,
   onRefresh,
+  onSelectIncident,
 }: {
   data: SecurityAlertsData | null
   loading: boolean
   onRefresh: (query?: string, severity?: string) => void
+  onSelectIncident?: (id: string) => void
 }) {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<'All' | Severity>('All')
@@ -965,6 +1412,7 @@ function SecurityAlerts({
   const [reviewed, setReviewed] = useState<string[]>([])
   const [saved, setSaved] = useState(false)
   const [showApproach, setShowApproach] = useState(false)
+  const [showWorkbench, setShowWorkbench] = useState(true)
 
   const alertsList = data?.alerts || initialAlerts
 
@@ -987,9 +1435,22 @@ function SecurityAlerts({
         title="Signals, explained simply"
         description="These are network-flow moments noticed as deviations from the baseline. They are prompts for review, not confirmed attacks."
         actions={
-          <button className={`button button-secondary ${saved ? 'button-saved' : ''}`} onClick={() => setSaved((v) => !v)}>
-            <Filter size={16} /> {saved ? 'View saved' : 'Save view'}
-          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              type="button"
+              className={`button ${showWorkbench ? 'button-dark' : 'button-secondary'}`}
+              onClick={() => setShowWorkbench((v) => !v)}
+            >
+              <Zap size={15} /> {showWorkbench ? 'Hide ML Inference' : 'Test ML Inference'}
+            </button>
+            <button
+              type="button"
+              className={`button button-secondary ${saved ? 'button-saved' : ''}`}
+              onClick={() => setSaved((v) => !v)}
+            >
+              <Filter size={16} /> {saved ? 'View saved' : 'Save view'}
+            </button>
+          </div>
         }
       />
       <div className="alert-overview-strip">
@@ -998,6 +1459,10 @@ function SecurityAlerts({
         <div><span className="strip-label">Flagged flow patterns</span><strong>{formatNumber(suspiciousCount)}</strong><span>in benchmark partition</span></div>
         <div className="strip-action"><ShieldCheck size={18} /> No alert is a verdict without context</div>
       </div>
+
+      {showWorkbench && (
+        <FlowInferenceWorkbench onSelectIncident={onSelectIncident} />
+      )}
 
       <section className="card alerts-card">
         <div className="alerts-toolbar">

@@ -7,6 +7,16 @@ benchmark statistics, normalized alerts, and candidate security incidents.
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from src.models.preprocessor import (
+    IncompleteFlowError,
+    InvalidFeatureValueError,
+    get_sample_flow_preset,
+)
+from src.models.registry import (
+    ModelCorruptError,
+    ModelIncompatibleError,
+    ModelNotFoundError,
+)
 from src.api.schemas import (
     AnalyzeFlowRequest,
     AnalyzeFlowResponse,
@@ -34,14 +44,52 @@ def get_service() -> IntelligenceService:
 
 
 @router.get("/health", summary="Health Check")
-def health_check() -> dict:
-    """Returns service health and operational status."""
+def health_check(
+    service: IntelligenceService = Depends(get_service),
+) -> dict:
+    """Returns service health, model readiness, and operational status."""
+    status_info = service.get_model_status()
     return {
         "status": "healthy",
         "service": "VYUHA Incident Intelligence API",
         "version": "0.1.0",
-        "data_provenance": "CICIDS2017 Verified Model Benchmarks & Demonstrations",
+        "data_provenance": "CICIDS2017 Verified Model Benchmarks & On-Demand Inference",
         "is_live_telemetry": False,
+        "models_loaded": status_info["is_loaded"],
+        "models_status": status_info["models"],
+    }
+
+
+@router.get("/analyze-flow/presets", summary="Sample Flow Presets")
+def get_flow_presets() -> dict:
+    """Returns verified synthetic 63-feature flow presets for on-demand inference testing."""
+    return {
+        "presets": {
+            "benign": {
+                "name": "Benign Web Browsing",
+                "category": "BENIGN",
+                "description": "Standard HTTPS TLS flow on port 443 with balanced payload and legitimate TCP window parameters.",
+                "flow": get_sample_flow_preset("benign"),
+            },
+            "portscan": {
+                "name": "Stealth SYN PortScan",
+                "category": "PortScan",
+                "description": "Single-packet SYN probe targeting SSH (port 22) with zero duration and inactive backward window.",
+                "flow": get_sample_flow_preset("portscan"),
+            },
+            "dos": {
+                "name": "Volumetric DoS Flood",
+                "category": "DoS_DDoS",
+                "description": "High-packet-volume HTTP flood targeting port 80 with compressed inter-arrival times.",
+                "flow": get_sample_flow_preset("dos"),
+            },
+            "anomaly": {
+                "name": "Statistical Novelty / Distribution Shift",
+                "category": "ANOMALY",
+                "description": "Out-of-distribution flow on port 8088 exhibiting rare TCP flags (URG, CWE, ECE) and abnormal header ratios.",
+                "flow": get_sample_flow_preset("anomaly"),
+            },
+        }
     }
 
 
@@ -108,15 +156,49 @@ def analyze_flows(
     request: AnalyzeFlowRequest,
     service: IntelligenceService = Depends(get_service),
 ) -> AnalyzeFlowResponse:
-    """Dynamically evaluates supplied flow records through Phase 4 alert normalization and incident clustering."""
-    alerts, incidents = service.analyze_flows(
-        flow_records=request.flows,
-        alert_on_threat_only=request.alert_on_threat_only,
-    )
+    """Dynamically evaluates supplied flow records through genuine Phase 6 ML inference and Phase 4 incident clustering."""
+    try:
+        alerts, incidents, evaluations, models_used, active_tier = service.analyze_flows(
+            flow_records=request.flows,
+            alert_on_threat_only=request.alert_on_threat_only,
+            anomaly_threshold_tier=request.anomaly_threshold_tier,
+        )
+    except IncompleteFlowError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "IncompleteFlowError",
+                "message": str(exc),
+                "record_index": exc.record_index,
+                "missing_features": exc.missing_features,
+            },
+        ) from exc
+    except InvalidFeatureValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "InvalidFeatureValueError",
+                "message": str(exc),
+                "record_index": exc.record_index,
+                "feature": exc.feature_name,
+            },
+        ) from exc
+    except (ModelNotFoundError, ModelCorruptError, ModelIncompatibleError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "ModelLoadError",
+                "message": f"Trained ML models could not be loaded: {exc}",
+            },
+        ) from exc
+
     threats_cnt = len([a for a in alerts if a.threat_status in ("ATTACK", "ANOMALY")])
     return AnalyzeFlowResponse(
         alerts=alerts,
         incidents=incidents,
         evaluated_flows_count=len(request.flows),
         threats_count=threats_cnt,
+        evaluations=evaluations,
+        models_used=models_used,
+        anomaly_threshold_tier=active_tier,
     )

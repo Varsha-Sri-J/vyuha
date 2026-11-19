@@ -186,10 +186,58 @@ class InsightsResponse(BaseModel):
     is_live_telemetry: bool = False
 
 
+class BinaryEvaluationDetail(BaseModel):
+    """Detailed output from the Supervised Binary Random Forest model."""
+    prediction: int
+    label: str
+    is_attack: bool
+    confidence: float
+    attack_probability: float
+    benign_probability: float
+    model_name: str = "rf_full"
+
+
+class MulticlassEvaluationDetail(BaseModel):
+    """Detailed output from the Supervised Multiclass Random Forest model."""
+    predicted_category: str
+    is_attack: bool
+    confidence: float
+    class_probabilities: Dict[str, float]
+    model_name: str = "multiclass_rf_full"
+
+
+class AnomalyEvaluationDetail(BaseModel):
+    """Detailed output from the Unsupervised Isolation Forest model."""
+    anomaly_score: float
+    calibrated_threshold: float
+    threshold_name: str
+    is_anomaly: bool
+    threat_status: str
+    is_attack: bool = False
+    model_name: str = "iforest_full_100k"
+
+
+class FlowEvaluationItem(BaseModel):
+    """Multi-engine consensus evaluation for a single network flow."""
+    flow_index: int
+    flow_id: str
+    consensus_status: str
+    consensus_threat: str
+    is_attack: bool
+    flagged_as_threat: bool
+    primary_category: Optional[str] = None
+    provisional_severity: str
+    explanation: str
+    binary: BinaryEvaluationDetail
+    multiclass: MulticlassEvaluationDetail
+    anomaly: AnomalyEvaluationDetail
+
+
 class AnalyzeFlowRequest(BaseModel):
     """Input payload to evaluate one or more network flows dynamically."""
-    flows: List[Dict[str, Any]] = Field(description="List of flow records with feature values")
+    flows: List[Dict[str, Any]] = Field(description="List of flow records with 63 feature values")
     alert_on_threat_only: bool = Field(default=False, description="Filter output to threats only")
+    anomaly_threshold_tier: Optional[str] = Field(default="fpr_1.0pct", description="Isolation Forest FPR tier: fpr_5.0pct | fpr_1.0pct | fpr_0.50pct | fpr_0.10pct")
 
 
 class AnalyzeFlowResponse(BaseModel):
@@ -198,3 +246,6 @@ class AnalyzeFlowResponse(BaseModel):
     incidents: List[IncidentItem]
     evaluated_flows_count: int
     threats_count: int
+    evaluations: List[FlowEvaluationItem] = Field(default_factory=list, description="Per-flow multi-engine predictions")
+    models_used: Dict[str, str] = Field(default_factory=dict, description="Active model artifacts used for inference")
+    anomaly_threshold_tier: str = Field(default="fpr_1.0pct", description="Active operating anomaly threshold tier")

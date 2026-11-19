@@ -9,6 +9,9 @@
 
 import type {
   AlertItem,
+  AnalyzeFlowRequest,
+  AnalyzeFlowResponse,
+  FlowPresetsResponse,
   HealthCheckData,
   Incident,
   IncidentsData,
@@ -104,9 +107,21 @@ export async function getInsights(): Promise<InsightsData> {
   return request<InsightsData>('/api/insights')
 }
 
-export async function analyzeFlows(flows: any[], alertOnThreatOnly = false): Promise<{ alerts: AlertItem[]; incidents: Incident[] }> {
-  return request<{ alerts: AlertItem[]; incidents: Incident[] }>('/api/analyze-flow', {
+export async function getFlowPresets(): Promise<FlowPresetsResponse> {
+  return request<FlowPresetsResponse>('/api/analyze-flow/presets')
+}
+
+export async function analyzeFlows(
+  flows: Record<string, any>[],
+  alertOnThreatOnly = false,
+  anomalyThresholdTier = 'fpr_1.0pct',
+): Promise<AnalyzeFlowResponse> {
+  return request<AnalyzeFlowResponse>('/api/analyze-flow', {
     method: 'POST',
-    body: JSON.stringify({ flows, alert_on_threat_only: alertOnThreatOnly }),
+    body: JSON.stringify({
+      flows,
+      alert_on_threat_only: alertOnThreatOnly,
+      anomaly_threshold_tier: anomalyThresholdTier,
+    }),
   })
 }

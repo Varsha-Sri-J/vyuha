@@ -13,6 +13,8 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import numpy as np
+
 from src.config import REPO_ROOT
 from src.intelligence.adapters import (
     AnomalyAlertAdapter,
@@ -29,10 +31,27 @@ from src.intelligence.schema import (
     IncidentStatus,
     ThreatStatus,
 )
+from src.models.inference import FusedFlowEvaluation, InferenceEngine
+from src.models.preprocessor import (
+    CANONICAL_63_FEATURES,
+    FlowInferencePreprocessor,
+    IncompleteFlowError,
+    InvalidFeatureValueError,
+    get_sample_flow_preset,
+)
+from src.models.registry import (
+    ModelCorruptError,
+    ModelIncompatibleError,
+    ModelNotFoundError,
+    ModelRegistry,
+)
 from src.api.schemas import (
     AlertItem,
+    AnomalyEvaluationDetail,
+    BinaryEvaluationDetail,
     CategoryDistribution,
     EngineMetric,
+    FlowEvaluationItem,
     FlowTotals,
     FrontendConfidence,
     FrontendIncidentStatus,
@@ -43,6 +62,7 @@ from src.api.schemas import (
     IncidentsResponse,
     InsightsResponse,
     MomentItem,
+    MulticlassEvaluationDetail,
     NetworkActivityResponse,
     OverviewResponse,
     SecurityAlertsResponse,
@@ -314,7 +334,11 @@ def map_incident_to_frontend(incident: CandidateIncident) -> IncidentItem:
 class IntelligenceService:
     """Manages telemetry, benchmark data, alert generation, and candidate incidents."""
 
-    def __init__(self, reports_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        reports_dir: Optional[Path] = None,
+        inference_engine: Optional[InferenceEngine] = None,
+    ):
         self.reports_dir = reports_dir or (REPO_ROOT / "reports")
         self.incident_generator = CandidateIncidentGenerator(
             temporal_window_seconds=300.0,
@@ -326,9 +350,25 @@ class IntelligenceService:
         self._alerts_store: List[Alert] = []
         self._incidents_store: List[CandidateIncident] = []
 
+        # Genuine Machine Learning Inference Engine (Phase 6)
+        self.inference_engine = inference_engine or InferenceEngine(
+            registry=ModelRegistry(),
+            preprocessor=FlowInferencePreprocessor(),
+            default_anomaly_tier="fpr_1.0pct",
+        )
+        # Preload and validate primary production model artifacts
+        try:
+            self.inference_engine.registry.load_all()
+        except Exception as exc:
+            logger.warning("Models could not be preloaded at startup: %s", exc)
+
         # Load reports and initialize baseline state
         self._load_benchmark_reports()
         self._initialize_demonstration_intelligence()
+
+    def get_model_status(self) -> Dict[str, Any]:
+        """Returns the loaded status and capability metadata of the machine learning models."""
+        return self.inference_engine.registry.get_status()
 
     def _load_benchmark_reports(self) -> None:
         """Loads Phase 1-3 benchmark results and EDA statistics safely."""
@@ -744,47 +784,140 @@ class IntelligenceService:
             is_live_telemetry=False,
         )
 
-    def analyze_flows(self, flow_records: List[Dict[str, Any]], alert_on_threat_only: bool = False) -> Tuple[List[AlertItem], List[IncidentItem]]:
-        """Dynamically evaluates flow records through the Phase 4 normalization and incident engine."""
+    def analyze_flows(
+        self,
+        flow_records: List[Dict[str, Any]],
+        alert_on_threat_only: bool = False,
+        anomaly_threshold_tier: Optional[str] = "fpr_1.0pct",
+    ) -> Tuple[List[AlertItem], List[IncidentItem], List[FlowEvaluationItem], Dict[str, str], str]:
+        """Dynamically evaluates flow records through genuine Phase 6 ML models and Phase 4 incident clustering."""
         if not flow_records:
-            return [], []
+            return [], [], [], {}, anomaly_threshold_tier or "fpr_1.0pct"
 
-        # Generate alerts from flow records
-        alerts: List[Alert] = []
-        for i, rec in enumerate(flow_records):
-            dst_port = rec.get("Destination Port") or rec.get("destination_port") or rec.get("dst_port")
-            cat = rec.get("attack_category") or rec.get("label_category") or "BENIGN"
-            is_atk = bool(cat != "BENIGN")
-
-            alt = Alert(
-                alert_id=f"dyn-alt-{i:03d}",
-                flow_id=f"dyn-flow-{i:03d}",
-                detection_engine=DetectionEngineType.MULTICLASS.value,
-                model_name="multiclass_rf_full",
-                prediction=cat,
-                threat_status=ThreatStatus.ATTACK.value if is_atk else ThreatStatus.BENIGN.value,
-                is_attack=is_atk,
-                attack_category=cat if is_atk else None,
-                destination_port=int(dst_port) if dst_port is not None else None,
-                severity=AlertSeverity.HIGH.value if cat in ("DoS_DDoS", "Infiltration") else (AlertSeverity.MEDIUM.value if is_atk else AlertSeverity.LOW.value),
-                confidence=0.92 if is_atk else 0.99,
-                evidence={"evaluated_at": datetime.datetime.now().isoformat()},
-            )
-            alerts.append(alt)
-
-        # Consolidate alerts
-        consolidated = MultiEngineAlertNormalizer.consolidate_alerts(
-            alerts, alert_on_threat_only=alert_on_threat_only
+        # 1. Run genuine multi-model inference and consensus fusion
+        fused_evaluations = self.inference_engine.evaluate_flows(
+            flow_records, anomaly_tier=anomaly_threshold_tier
         )
 
-        # Generate candidate incidents
-        threat_alerts = [a for a in consolidated if a.threat_status in (ThreatStatus.ATTACK.value, ThreatStatus.ANOMALY.value)]
+        # 2. Translate genuine model outputs into canonical Alert objects using adapters
+        raw_alerts: List[Alert] = []
+        for fused in fused_evaluations:
+            # Ensure unique flow_id is preserved on the flow record passed to adapters
+            rec_with_id = dict(fused.raw_flow_features)
+            rec_with_id["Flow ID"] = fused.flow_id
+
+            # Binary alert adapter
+            bin_adapter = BinaryAlertAdapter(
+                model_name=fused.binary.model_name,
+                alert_on_attack_only=False,
+            )
+            bin_alerts = bin_adapter.adapt(
+                predictions=[fused.binary.prediction],
+                flow_records=[rec_with_id],
+                probabilities=np.array([[fused.binary.benign_probability, fused.binary.attack_probability]]),
+            )
+            raw_alerts.extend(bin_alerts)
+
+            # Multiclass alert adapter
+            classes = list(fused.multiclass.class_probabilities.keys())
+            mc_adapter = MulticlassAlertAdapter(
+                model_name=fused.multiclass.model_name,
+                alert_on_attack_only=False,
+                classes=classes,
+            )
+            prob_arr = np.array([[fused.multiclass.class_probabilities[c] for c in classes]])
+            mc_alerts = mc_adapter.adapt(
+                predictions=[fused.multiclass.predicted_category],
+                flow_records=[rec_with_id],
+                probabilities=prob_arr,
+                classes=classes,
+            )
+            raw_alerts.extend(mc_alerts)
+
+            # Anomaly alert adapter
+            ano_adapter = AnomalyAlertAdapter(
+                model_name=fused.anomaly.model_name,
+                calibrated_threshold=fused.anomaly.calibrated_threshold,
+                threshold_name=fused.anomaly.threshold_name,
+                alert_on_anomaly_only=False,
+            )
+            ano_alerts = ano_adapter.adapt(
+                anomaly_scores=[fused.anomaly.anomaly_score],
+                flow_records=[rec_with_id],
+                calibrated_threshold=fused.anomaly.calibrated_threshold,
+                threshold_name=fused.anomaly.threshold_name,
+            )
+            raw_alerts.extend(ano_alerts)
+
+        # 3. Consolidate alerts by flow_id across all three engines
+        consolidated = MultiEngineAlertNormalizer.consolidate_alerts(
+            raw_alerts, alert_on_threat_only=alert_on_threat_only
+        )
+
+        # 4. Generate candidate incidents from threats
+        threat_alerts = [
+            a for a in consolidated
+            if a.threat_status in (ThreatStatus.ATTACK.value, ThreatStatus.ANOMALY.value)
+        ]
         incidents = self.incident_generator.generate_incidents(threat_alerts)
 
+        # 5. Map to frontend response DTOs
         alerts_mapped = [map_alert_to_frontend(a) for a in consolidated]
         incidents_mapped = [map_incident_to_frontend(inc) for inc in incidents]
 
-        return alerts_mapped, incidents_mapped
+        evaluations_mapped = [
+            FlowEvaluationItem(
+                flow_index=f.flow_index,
+                flow_id=f.flow_id,
+                consensus_status=f.consensus_status,
+                consensus_threat=f.consensus_threat,
+                is_attack=f.is_attack,
+                flagged_as_threat=f.flagged_as_threat,
+                primary_category=f.primary_category,
+                provisional_severity=f.provisional_severity,
+                explanation=f.explanation,
+                binary=BinaryEvaluationDetail(
+                    prediction=f.binary.prediction,
+                    label=f.binary.label,
+                    is_attack=f.binary.is_attack,
+                    confidence=f.binary.confidence,
+                    attack_probability=f.binary.attack_probability,
+                    benign_probability=f.binary.benign_probability,
+                    model_name=f.binary.model_name,
+                ),
+                multiclass=MulticlassEvaluationDetail(
+                    predicted_category=f.multiclass.predicted_category,
+                    is_attack=f.multiclass.is_attack,
+                    confidence=f.multiclass.confidence,
+                    class_probabilities=f.multiclass.class_probabilities,
+                    model_name=f.multiclass.model_name,
+                ),
+                anomaly=AnomalyEvaluationDetail(
+                    anomaly_score=f.anomaly.anomaly_score,
+                    calibrated_threshold=f.anomaly.calibrated_threshold,
+                    threshold_name=f.anomaly.threshold_name,
+                    is_anomaly=f.anomaly.is_anomaly,
+                    threat_status=f.anomaly.threat_status,
+                    is_attack=f.anomaly.is_attack,
+                    model_name=f.anomaly.model_name,
+                ),
+            )
+            for f in fused_evaluations
+        ]
+
+        models_used = {
+            "binary": "rf_full.joblib",
+            "multiclass": "multiclass_rf_full.joblib",
+            "anomaly": "iforest_full_100k.joblib",
+        }
+
+        active_tier = (
+            fused_evaluations[0].anomaly.threshold_name
+            if fused_evaluations
+            else (anomaly_threshold_tier or "fpr_1.0pct")
+        )
+
+        return alerts_mapped, incidents_mapped, evaluations_mapped, models_used, active_tier
 
     # -------------------------------------------------------------------------
     # Chart Helpers

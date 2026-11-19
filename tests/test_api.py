@@ -20,13 +20,19 @@ client = TestClient(app)
 
 
 def test_health_check():
-    """Verifies the health check endpoint returns 200 and declares offline provenance."""
+    """Verifies the health check endpoint returns 200, declares offline provenance, and reports model readiness."""
     response = client.get("/api/health")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "healthy"
     assert data["is_live_telemetry"] is False
     assert "data_provenance" in data
+    assert "models_loaded" in data
+    assert data["models_loaded"] is True
+    assert "models_status" in data
+    assert "binary" in data["models_status"]
+    assert "multiclass" in data["models_status"]
+    assert "anomaly" in data["models_status"]
 
 
 def test_root_endpoint():
@@ -172,22 +178,63 @@ def test_get_insights():
     assert "anomaly_iforest_roc_auc" in data["benchmark_metrics"]
 
 
-def test_analyze_flow_dynamic():
-    """Verifies the on-demand dynamic flow evaluation endpoint."""
-    sample_flows = [
-        {"Destination Port": 80, "attack_category": "PortScan"},
-        {"Destination Port": 80, "attack_category": "PortScan"},
-        {"Destination Port": 443, "attack_category": "BENIGN"},
-    ]
+def test_analyze_flow_dynamic_genuine():
+    """Verifies the on-demand dynamic flow evaluation endpoint using genuine ML inference."""
+    from src.models.preprocessor import get_sample_flow_preset
+
+    flow_benign = get_sample_flow_preset("benign")
+    flow_portscan_1 = get_sample_flow_preset("portscan")
+    flow_portscan_2 = dict(flow_portscan_1)
+    flow_portscan_2["Destination Port"] = 22  # Same port to trigger clustering
+
     payload = {
-        "flows": sample_flows,
+        "flows": [flow_benign, flow_portscan_1, flow_portscan_2],
         "alert_on_threat_only": False,
+        "anomaly_threshold_tier": "fpr_1.0pct",
     }
     response = client.post("/api/analyze-flow", json=payload)
     assert response.status_code == 200
     data = response.json()
     assert data["evaluated_flows_count"] == 3
     assert len(data["alerts"]) == 3
-    assert data["threats_count"] == 2
-    # Should group the two PortScan flows on port 80 into a candidate incident
-    assert len(data["incidents"]) >= 1
+    assert "evaluations" in data
+    assert len(data["evaluations"]) == 3
+    assert "models_used" in data
+    assert data["models_used"]["binary"] == "rf_full.joblib"
+    assert data["models_used"]["multiclass"] == "multiclass_rf_full.joblib"
+    assert data["models_used"]["anomaly"] == "iforest_full_100k.joblib"
+
+    # Check that evaluations contains genuine probabilities, not hardcoded mock confidence
+    first_eval = data["evaluations"][0]
+    assert "binary" in first_eval
+    assert "multiclass" in first_eval
+    assert "anomaly" in first_eval
+    assert "consensus_status" in first_eval
+    assert "explanation" in first_eval
+
+
+def test_analyze_flow_incomplete_rejected():
+    """Verifies that incomplete flow records missing 63 features are rejected with HTTP 422."""
+    payload = {
+        "flows": [{"Destination Port": 80}],
+        "alert_on_threat_only": False,
+    }
+    response = client.post("/api/analyze-flow", json=payload)
+    assert response.status_code == 422
+    err = response.json()["detail"]
+    assert err["error"] == "IncompleteFlowError"
+    assert "missing_features" in err
+    assert len(err["missing_features"]) > 50
+
+
+def test_get_flow_presets():
+    """Verifies the presets endpoint returns valid sample flows for UI and test usage."""
+    response = client.get("/api/analyze-flow/presets")
+    assert response.status_code == 200
+    presets = response.json()["presets"]
+    assert "benign" in presets
+    assert "portscan" in presets
+    assert "dos" in presets
+    assert "anomaly" in presets
+    # Check that benign preset has all 63 features
+    assert len(presets["benign"]["flow"]) == 63

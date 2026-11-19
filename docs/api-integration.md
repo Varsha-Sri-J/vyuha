@@ -98,7 +98,7 @@ vyuha/
 ## 4. API Endpoints Reference
 
 ### 4.1 `GET /api/health`
-Checks backend operational status and declares data provenance.
+Checks backend operational status, active model artifact readiness, and declares data provenance.
 * **Status**: `200 OK`
 * **Response Body**:
   ```json
@@ -106,8 +106,14 @@ Checks backend operational status and declares data provenance.
     "status": "healthy",
     "service": "VYUHA Incident Intelligence API",
     "version": "0.1.0",
-    "data_provenance": "CICIDS2017 Verified Model Benchmarks & Demonstrations",
-    "is_live_telemetry": false
+    "data_provenance": "CICIDS2017 Verified Model Benchmarks & On-Demand Inference",
+    "is_live_telemetry": false,
+    "models_loaded": true,
+    "models_status": {
+      "binary_rf": true,
+      "multiclass_rf": true,
+      "iforest": true
+    }
   }
   ```
 
@@ -164,10 +170,73 @@ Supplies attack category distributions, detection engine participation metrics, 
   - `engine_data`: Model evaluation counts (Supervised Binary RF, Multiclass RF, Anomaly Isolation Forest).
   - `benchmark_metrics`: Verified model metrics (`binary_rf_accuracy`, `binary_rf_precision`, `binary_rf_recall`, `binary_rf_f1`, `anomaly_iforest_roc_auc`, `anomaly_iforest_f1`).
 
-### 4.8 `POST /api/analyze-flow`
-Evaluates dynamic network flow records on demand through Phase 4 alert normalization and temporal incident clustering.
-* **Request Model**: `AnalyzeFlowRequest` (`flows: List[dict]`, `alert_on_threat_only: bool`)
-* **Response Model**: `AnalyzeFlowResponse` (`alerts`, `incidents`, `evaluated_flows_count`, `threats_count`)
+### 4.8 `GET /api/analyze-flow/presets`
+Retrieves calibrated 63-feature network flow presets representing characteristic traffic behaviors for testing the ML inference engine.
+* **Response Model**: `dict` containing `presets` key
+* **Preset Definitions**:
+  - `benign`: Benign HTTPS Web Browsing (Destination Port 443, standard TCP window, zero loss).
+  - `portscan`: Stealth SYN PortScan (Destination Port 22, 0 duration, -1 backward window, single packet).
+  - `dos`: Volumetric DoS/DDoS Flood (Destination Port 80, high packet volume, compressed inter-arrival times).
+  - `anomaly`: Statistical Novelty / Zero-Day (Destination Port 8088, abnormal TCP flag distribution URG/CWE/ECE, out-of-distribution header sizes).
+* **Response Structure**:
+  ```json
+  {
+    "presets": {
+      "benign": {
+        "name": "Benign Web Browsing",
+        "category": "BENIGN",
+        "description": "Standard HTTPS TLS flow on port 443 with balanced payload and legitimate TCP window parameters.",
+        "flow": { "Destination Port": 443, "Flow Duration": 115000, ... }
+      },
+      ...
+    }
+  }
+  ```
+
+### 4.9 `POST /api/analyze-flow`
+Evaluates one or more 63-feature network flow vectors on demand through genuine Phase 6 machine learning inference (`Binary RF`, `Multiclass RF`, `Isolation Forest`) and Phase 4 incident clustering.
+* **Request Model**: `AnalyzeFlowRequest`
+  - `flows`: `List[Dict[str, Any]]` — List of flow dictionaries containing the required 63 features (accepts both clean snake_case and raw CICIDS2017 feature names).
+  - `alert_on_threat_only`: `bool` (default: `false`) — When true, benign flows that trigger no threat alerts are omitted from the canonical alerts list.
+  - `anomaly_threshold_tier`: `Optional[str]` (default: `"fpr_1.0pct"`) — Calibrated False Positive Rate threshold tier for Isolation Forest (`"fpr_5.0pct"`, `"fpr_1.0pct"`, `"fpr_0.50pct"`, `"fpr_0.10pct"`).
+* **Response Model**: `AnalyzeFlowResponse`
+  - `alerts`: `List[AlertItem]` — Normalized security alerts produced from flagged flows.
+  - `incidents`: `List[IncidentItem]` — Candidate incidents synthesized by clustering correlated alerts.
+  - `evaluated_flows_count`: `int` — Count of evaluated flow records.
+  - `threats_count`: `int` — Count of flows flagged as threats (`ATTACK` or `ANOMALY`).
+  - `evaluations`: `List[FlowEvaluationItem]` — Detailed multi-engine breakdown for each flow:
+    - `flow_index`: Positional index in the request.
+    - `flow_id`: Deterministic flow identifier (e.g. `flow_0`).
+    - `consensus_status`: Multi-engine consensus verdict:
+      - `CORROBORATED_ATTACK`: Binary RF Attack (`>=0.50`) **AND** Anomaly Score `>= Threshold`.
+      - `SUPERVISED_CONFLICT`: Binary RF Attack (`>=0.50`) **AND** Anomaly Score `< Threshold`.
+      - `NOVEL_ANOMALY`: Binary RF Benign (`<0.50`) **AND** Anomaly Score `>= Threshold`.
+      - `CORROBORATED_BENIGN`: Binary RF Benign (`<0.50`) **AND** Anomaly Score `< Threshold`.
+    - `consensus_threat`: Aggregated status (`"ATTACK"`, `"ANOMALY"`, `"BENIGN"`).
+    - `is_attack`: Supervised binary attack classification boolean.
+    - `flagged_as_threat`: Whether the flow met threat criteria under consensus.
+    - `primary_category`: Categorical prediction (e.g. `"PortScan"`, `"DoS_DDoS"`, `"BENIGN"`).
+    - `provisional_severity`: Calculated severity (`"CRITICAL"`, `"HIGH"`, `"MEDIUM"`, `"LOW"`, `"INFO"`).
+    - `explanation`: Human-readable explanation of the multi-engine findings.
+    - `binary`: `BinaryEvaluationDetail` (`prediction`, `label`, `is_attack`, `confidence`, `attack_probability`, `benign_probability`, `model_name`).
+    - `multiclass`: `MulticlassEvaluationDetail` (`predicted_category`, `is_attack`, `confidence`, `class_probabilities`, `model_name`).
+    - `anomaly`: `AnomalyEvaluationDetail` (`anomaly_score`, `calibrated_threshold`, `threshold_name`, `is_anomaly`, `threat_status`, `is_attack`, `model_name`).
+  - `models_used`: `Dict[str, str]` — Map of model types to loaded joblib artifact filenames.
+  - `anomaly_threshold_tier`: `str` — Active FPR threshold tier used.
+* **Status Codes & Error Responses**:
+  - `200 OK`: Successful inference evaluation.
+  - `422 Unprocessable Entity`: Raised on `IncompleteFlowError` when one or more required features are missing from the 63-feature schema:
+    ```json
+    {
+      "detail": {
+        "error": "IncompleteFlowError",
+        "message": "Flow record 0 is missing 2 required features: ['Destination Port', 'Flow Duration']",
+        "record_index": 0,
+        "missing_features": ["Destination Port", "Flow Duration"]
+      }
+    }
+    ```
+  - `503 Service Unavailable`: Raised on `ModelLoadError` if model artifacts cannot be loaded from disk or are corrupted.
 
 ---
 
@@ -177,7 +246,8 @@ Evaluates dynamic network flow records on demand through Phase 4 alert normaliza
 |---|---|---|---|
 | `/` or `/overview` | `Overview` | `GET /api/overview` | Posture status pill, flow counters, diurnal SVG area chart, attention cards, recent alerts table |
 | `/activity` | `NetworkActivity` | `GET /api/network-activity` | Flow summary cards, diurnal volume chart, weekly bar chart, traffic moment cards |
-| `/alerts` | `SecurityAlerts` | `GET /api/alerts` | Search bar, severity filter pills, alert count, expandable alert rows with multi-engine evidence |
+| `/alerts` | `SecurityAlerts` | `GET /api/alerts` | Search bar, severity filter pills, alert count, expandable alert rows with multi-engine evidence, "Test ML Inference" launcher |
+| `/workbench` | `FlowInferenceWorkbench` | `GET /api/analyze-flow/presets`<br>`POST /api/analyze-flow` | 4 Preset selector cards (Benign, PortScan, DoS, Novelty Anomaly), calibrated FPR threshold selector, 63-feature inspection, live multi-engine consensus badge, probability distribution gauges, one-click jump to candidate incident details |
 | `/incidents` | `Incidents` | `GET /api/incidents` | Status filter pills, candidate incident cards with alert count and next steps |
 | `/details` | `IncidentDetails` | `GET /api/incidents/{id}` | Dynamic incident title, relationship explanation (with summary fallback), timeline events, evidence cards, 404 state |
 | `/insights` | `Insights` | `GET /api/insights` | Attack category progress bars, engine review badges, weekly rhythm chart, model benchmark guidance cards |
@@ -186,18 +256,26 @@ Evaluates dynamic network flow records on demand through Phase 4 alert normaliza
 
 ## 6. Verification and Test Suite
 
-The integration is verified by 94 automated backend tests and production frontend bundling:
+The integration is verified by 117 automated backend tests and production frontend bundling:
 
-1. **Backend Integration Tests** (`vyuha/tests/test_api.py`):
-   - Health check provenance validation.
-   - Overview payload consistency and attention item contract.
-   - Diurnal and weekly network activity data structure.
-   - Alert filtering by severity and keyword search.
-   - Candidate incident retrieval and status filtering.
-   - Incident lookup by ID and strict 404 enforcement.
-   - Dynamic non-empty relationship fallback validation.
-   - Model benchmark metrics verification in insights.
-   - Dynamic flow evaluation and on-demand incident synthesis.
+1. **Backend Automated Tests** (`vyuha/tests/` — 117 tests passing):
+   * **API Integration Tests** (`tests/test_api.py`):
+     - Health check provenance and model status validation (`models_loaded: true`).
+     - Overview payload consistency, diurnal activity, and attention item contract.
+     - Security alerts retrieval, severity filtering, and keyword search.
+     - Candidate incident clustering, status filtering, and strict 404 enforcement.
+     - Preset flow retrieval (`GET /api/analyze-flow/presets`).
+     - Live on-demand ML flow inference (`POST /api/analyze-flow`).
+   * **ML Inference Engine Tests** (`tests/test_ml_inference.py`):
+     - Flow preprocessor 63-feature schema verification and alias mapping.
+     - TCP window sentinel value preservation (`-1` and `65535` preserved intact).
+     - Model registry thread-safe singleton lifecycle and warm cache access.
+     - Multi-engine consensus matrix (`CORROBORATED_ATTACK`, `SUPERVISED_CONFLICT`, `NOVEL_ANOMALY`, `CORROBORATED_BENIGN`).
+     - Unsupervised novelty handling (anomaly-only flows are never flagged as confirmed attacks).
+     - Strict HTTP 422 enforcement on incomplete feature vectors.
+     - Strict HTTP 503 error handling on missing or corrupt model artifacts.
+   * **Phase 1–4 Core Tests**:
+     - 94 unit and integration tests covering alert normalization, sliding-window temporal correlation, target graph clustering, and dataset transforms.
 2. **Frontend Production Build**:
    ```bash
    cd frontend && npm run build
