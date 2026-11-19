@@ -180,35 +180,53 @@ export interface HealthCheckData {
 
 export interface BinaryEvaluationDetail {
   is_attack: boolean
-  attack_probability: number
-  confidence: number
-  decision_threshold: number
+  attack_probability?: number
+  confidence?: number
+  decision_threshold?: number
+  prediction?: number
+  label?: string
+  benign_probability?: number
+  model_name?: string
 }
 
 export interface MulticlassEvaluationDetail {
   predicted_category: string
-  category_probabilities: Record<string, number>
-  confidence: number
+  is_attack?: boolean
+  confidence?: number
+  category_probabilities?: Record<string, number>
+  class_probabilities?: Record<string, number>
+  model_name?: string
 }
 
 export interface AnomalyEvaluationDetail {
   anomaly_score: number
-  threshold: number
-  threshold_tier: string
+  calibrated_threshold?: number
+  threshold?: number
+  threshold_name?: string
+  threshold_tier?: string
   is_anomaly: boolean
-  calibrated_thresholds: Record<string, number>
+  threat_status?: string
+  is_attack?: boolean
+  model_name?: string
+  calibrated_thresholds?: Record<string, number>
 }
 
 export interface FlowEvaluationItem {
+  flow_index?: number
   flow_id: string
   destination_port?: number | null
   binary: BinaryEvaluationDetail
   multiclass: MulticlassEvaluationDetail
   anomaly: AnomalyEvaluationDetail
   consensus_status: string
-  threat_status: string
+  consensus_threat?: string
+  threat_status?: string
   is_attack: boolean
-  flow_summary: string
+  flagged_as_threat?: boolean
+  primary_category?: string | null
+  provisional_severity?: string
+  explanation?: string
+  flow_summary?: string
 }
 
 export interface AnalyzeFlowRequest {

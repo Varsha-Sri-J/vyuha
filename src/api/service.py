@@ -880,6 +880,8 @@ class IntelligenceService:
                 primary_category=f.primary_category,
                 provisional_severity=f.provisional_severity,
                 explanation=f.explanation,
+                flow_summary=f.explanation,
+                destination_port=int(f.raw_flow_features.get("Destination Port", 0)) if f.raw_flow_features and "Destination Port" in f.raw_flow_features else None,
                 binary=BinaryEvaluationDetail(
                     prediction=f.binary.prediction,
                     label=f.binary.label,
@@ -887,6 +889,7 @@ class IntelligenceService:
                     confidence=f.binary.confidence,
                     attack_probability=f.binary.attack_probability,
                     benign_probability=f.binary.benign_probability,
+                    decision_threshold=0.50,
                     model_name=f.binary.model_name,
                 ),
                 multiclass=MulticlassEvaluationDetail(
@@ -899,7 +902,9 @@ class IntelligenceService:
                 anomaly=AnomalyEvaluationDetail(
                     anomaly_score=f.anomaly.anomaly_score,
                     calibrated_threshold=f.anomaly.calibrated_threshold,
+                    threshold=f.anomaly.calibrated_threshold,
                     threshold_name=f.anomaly.threshold_name,
+                    threshold_tier=f.anomaly.threshold_name,
                     is_anomaly=f.anomaly.is_anomaly,
                     threat_status=f.anomaly.threat_status,
                     is_attack=f.anomaly.is_attack,

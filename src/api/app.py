@@ -6,6 +6,7 @@ mounts the intelligence API routers, and defines root health checks.
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from src.api.routes import router as api_router
 
@@ -39,6 +40,23 @@ app.add_middleware(
 
 # Mount Intelligence API router
 app.include_router(api_router)
+
+
+@app.get("/alerts", include_in_schema=False)
+@app.get("/security-alerts", include_in_schema=False)
+@app.get("/security-analysis", include_in_schema=False)
+def redirect_to_alerts():
+    return RedirectResponse(url="/api/alerts")
+
+
+@app.get("/overview", include_in_schema=False)
+def redirect_to_overview():
+    return RedirectResponse(url="/api/overview")
+
+
+@app.get("/incidents", include_in_schema=False)
+def redirect_to_incidents():
+    return RedirectResponse(url="/api/incidents")
 
 
 @app.get("/", summary="Root Endpoint")

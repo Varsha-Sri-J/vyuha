@@ -194,6 +194,7 @@ class BinaryEvaluationDetail(BaseModel):
     confidence: float
     attack_probability: float
     benign_probability: float
+    decision_threshold: float = 0.50
     model_name: str = "rf_full"
 
 
@@ -210,7 +211,9 @@ class AnomalyEvaluationDetail(BaseModel):
     """Detailed output from the Unsupervised Isolation Forest model."""
     anomaly_score: float
     calibrated_threshold: float
+    threshold: Optional[float] = None
     threshold_name: str
+    threshold_tier: Optional[str] = None
     is_anomaly: bool
     threat_status: str
     is_attack: bool = False
@@ -228,6 +231,8 @@ class FlowEvaluationItem(BaseModel):
     primary_category: Optional[str] = None
     provisional_severity: str
     explanation: str
+    flow_summary: Optional[str] = None
+    destination_port: Optional[int] = None
     binary: BinaryEvaluationDetail
     multiclass: MulticlassEvaluationDetail
     anomaly: AnomalyEvaluationDetail

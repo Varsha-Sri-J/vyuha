@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Component, useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   Activity,
@@ -62,6 +62,7 @@ import type {
   Incident,
   IncidentEvidenceItem,
   IncidentStatus,
+  IncidentsData,
   InsightsData,
   LiveConnectionItem,
   LiveStatusResponse,
@@ -236,9 +237,84 @@ function resolveAttentionIcon(icon?: string): LucideIcon {
   return Info
 }
 
+const pathAliases: Record<string, Page> = {
+  '/alerts': 'alerts',
+  '/security-alerts': 'alerts',
+  '/security-analysis': 'alerts',
+  '/analysis': 'alerts',
+  '/workbench': 'alerts',
+  '/overview': 'overview',
+  '/network-activity': 'activity',
+  '/activity': 'activity',
+  '/incidents': 'incidents',
+  '/details': 'details',
+  '/incident-details': 'details',
+  '/insights': 'insights',
+  '/live': 'live',
+  '/live-monitoring': 'live',
+}
+
 function pageForPath(pathname: string): Page {
-  const match = (Object.entries(pathForPage) as [Page, string][]).find(([, path]) => path === pathname)
+  const clean = pathname.endsWith('/') && pathname.length > 1 ? pathname.slice(0, -1) : pathname
+  if (pathAliases[clean]) {
+    return pathAliases[clean]
+  }
+  const match = (Object.entries(pathForPage) as [Page, string][]).find(([, path]) => path === clean)
   return match?.[0] ?? 'overview'
+}
+
+interface ErrorBoundaryProps {
+  children: ReactNode
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean
+  error: Error | null
+}
+
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props)
+    this.state = { hasError: false, error: null }
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error }
+  }
+
+  componentDidCatch(error: Error, errorInfo: any) {
+    console.error('VYUHA ErrorBoundary caught render error:', error, errorInfo)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: '32px', maxWidth: '800px', margin: '40px auto', background: '#fff', borderRadius: '12px', border: '1px solid #e2ddd3', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: '#c25e40', marginBottom: '16px' }}>
+            <AlertCircle size={24} />
+            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>Section Render Error</h2>
+          </div>
+          <p style={{ color: '#575249', fontSize: '14px', lineHeight: 1.6 }}>
+            A client-side error occurred while rendering this view. Your backend connection and other sections remain intact.
+          </p>
+          <pre style={{ background: '#f5f2eb', padding: '12px', borderRadius: '6px', fontSize: '12px', color: '#38342d', overflowX: 'auto', margin: '16px 0' }}>
+            {this.state.error?.message || 'Unknown render error'}
+          </pre>
+          <button
+            type="button"
+            className="button button-dark"
+            onClick={() => {
+              this.setState({ hasError: false, error: null })
+              window.location.reload()
+            }}
+          >
+            <RefreshCw size={14} /> Reload Page
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
 }
 
 const formatNumber = (value: number) => new Intl.NumberFormat('en-IN').format(value)
@@ -371,72 +447,74 @@ function App() {
             onRetry={() => loadPageData(activePage)}
           />
 
-          {activePage === 'overview' && (
-            <Overview
-              onNavigate={navigate}
-              data={overviewData}
-              loading={loading}
-            />
-          )}
+          <ErrorBoundary>
+            {activePage === 'overview' && (
+              <Overview
+                onNavigate={navigate}
+                data={overviewData}
+                loading={loading}
+              />
+            )}
 
-          {activePage === 'live' && (
-            <LiveMonitoring onNavigate={navigate} />
-          )}
+            {activePage === 'live' && (
+              <LiveMonitoring onNavigate={navigate} />
+            )}
 
-          {activePage === 'activity' && (
-            <NetworkActivity
-              data={activityData}
-              loading={loading}
-            />
-          )}
+            {activePage === 'activity' && (
+              <NetworkActivity
+                data={activityData}
+                loading={loading}
+              />
+            )}
 
-          {activePage === 'alerts' && (
-            <SecurityAlerts
-              data={alertsData}
-              loading={loading}
-              onRefresh={(q, sev) => {
-                getAlerts(q, sev)
-                  .then(setAlertsData)
-                  .catch(() => {})
-              }}
-              onSelectIncident={(id) => {
-                setSelectedIncident(id)
-                navigate('details')
-              }}
-            />
-          )}
+            {activePage === 'alerts' && (
+              <SecurityAlerts
+                data={alertsData}
+                loading={loading}
+                onRefresh={(q, sev) => {
+                  getAlerts(q, sev)
+                    .then(setAlertsData)
+                    .catch(() => {})
+                }}
+                onSelectIncident={(id) => {
+                  setSelectedIncident(id)
+                  navigate('details')
+                }}
+              />
+            )}
 
-          {activePage === 'incidents' && (
-            <IncidentsPage
-              data={incidentsData}
-              loading={loading}
-              onOpenDetails={(id) => {
-                setSelectedIncident(id)
-                navigate('details')
-              }}
-              onFilterChange={(st) => {
-                getIncidents(st)
-                  .then(setIncidentsData)
-                  .catch(() => {})
-              }}
-            />
-          )}
+            {activePage === 'incidents' && (
+              <IncidentsPage
+                data={incidentsData}
+                loading={loading}
+                onOpenDetails={(id) => {
+                  setSelectedIncident(id)
+                  navigate('details')
+                }}
+                onFilterChange={(st) => {
+                  getIncidents(st)
+                    .then(setIncidentsData)
+                    .catch(() => {})
+                }}
+              />
+            )}
 
-          {activePage === 'details' && (
-            <IncidentDetails
-              incidentId={selectedIncident}
-              fallbackIncidents={incidentsData?.incidents || initialIncidents}
-              isSampleMode={isSampleMode}
-              onBack={() => navigate('incidents')}
-            />
-          )}
+            {activePage === 'details' && (
+              <IncidentDetails
+                incidentId={selectedIncident}
+                fallbackIncidents={incidentsData?.incidents || initialIncidents}
+                isSampleMode={isSampleMode}
+                onBack={() => navigate('incidents')}
+              />
+            )}
 
-          {activePage === 'insights' && (
-            <Insights
-              data={insightsData}
-              loading={loading}
-            />
-          )}
+            {activePage === 'insights' && (
+              <Insights
+                data={insightsData}
+                loading={loading}
+              />
+            )}
+          </ErrorBoundary>
         </div>
       </main>
     </div>
@@ -1516,7 +1594,8 @@ function FlowInferenceWorkbench({
   }, [])
 
   const evaluation = result?.evaluations?.[0]
-  const currentPresetAvailable = Boolean(presets[selectedPresetKey] || initialFlowPresets[selectedPresetKey])
+  const activePreset = presets[selectedPresetKey] || initialFlowPresets[selectedPresetKey]
+  const currentPresetAvailable = Boolean(activePreset?.flow)
 
   return (
     <div className="ml-workbench-card">
@@ -1730,7 +1809,7 @@ function FlowInferenceWorkbench({
                   {evaluation.consensus_status === 'CORROBORATED_BENIGN' &&
                     'Corroborated Benign — Normal Traffic Across All Models'}
                 </strong>
-                <span>{evaluation.flow_summary}</span>
+                <span>{evaluation.explanation || evaluation.flow_summary || 'Multi-engine consensus evaluation completed.'}</span>
               </div>
             </div>
             <span className="consensus-badge-pill">{evaluation.consensus_status}</span>
@@ -1751,24 +1830,24 @@ function FlowInferenceWorkbench({
               </div>
               <div className="model-verdict-row">
                 <span className="model-verdict">{evaluation.binary.is_attack ? 'Malicious' : 'Benign'}</span>
-                <span className="model-metric-val">{(evaluation.binary.attack_probability * 100).toFixed(1)}% prob</span>
+                <span className="model-metric-val">{(Number(evaluation.binary.attack_probability ?? (evaluation.binary.is_attack ? 1 : 0)) * 100).toFixed(1)}% prob</span>
               </div>
               <div className="prob-track">
                 <div
                   className={evaluation.binary.is_attack ? 'prob-fill-attack' : 'prob-fill-benign'}
                   style={{
-                    width: `${Math.min(100, Math.max(4, evaluation.binary.attack_probability * 100))}%`,
+                    width: `${Math.min(100, Math.max(4, Number(evaluation.binary.attack_probability ?? (evaluation.binary.is_attack ? 1 : 0)) * 100))}%`,
                   }}
                 />
               </div>
               <div className="model-meta-table">
                 <div className="model-meta-row">
                   <span>Confidence:</span>
-                  <strong>{(evaluation.binary.confidence * 100).toFixed(1)}%</strong>
+                  <strong>{(Number(evaluation.binary.confidence ?? 1) * 100).toFixed(1)}%</strong>
                 </div>
                 <div className="model-meta-row">
                   <span>Decision Threshold:</span>
-                  <strong>{evaluation.binary.decision_threshold.toFixed(2)}</strong>
+                  <strong>{Number((evaluation.binary as any).decision_threshold ?? 0.50).toFixed(2)}</strong>
                 </div>
                 <div className="model-meta-row">
                   <span>Artifact:</span>
@@ -1785,7 +1864,7 @@ function FlowInferenceWorkbench({
               </div>
               <div className="model-verdict-row">
                 <span className="model-verdict">{evaluation.multiclass.predicted_category}</span>
-                <span className="model-metric-val">{(evaluation.multiclass.confidence * 100).toFixed(1)}% conf</span>
+                <span className="model-metric-val">{(Number(evaluation.multiclass.confidence ?? 1) * 100).toFixed(1)}% conf</span>
               </div>
               <div className="prob-track">
                 <div
@@ -1793,7 +1872,7 @@ function FlowInferenceWorkbench({
                     evaluation.multiclass.predicted_category === 'BENIGN' ? 'prob-fill-benign' : 'prob-fill-attack'
                   }
                   style={{
-                    width: `${Math.min(100, Math.max(4, evaluation.multiclass.confidence * 100))}%`,
+                    width: `${Math.min(100, Math.max(4, Number(evaluation.multiclass.confidence ?? 1) * 100))}%`,
                   }}
                 />
               </div>
@@ -1804,7 +1883,7 @@ function FlowInferenceWorkbench({
                 </div>
                 <div className="model-meta-row">
                   <span>Target Port:</span>
-                  <strong>{evaluation.destination_port ? `Port ${evaluation.destination_port}` : 'None'}</strong>
+                  <strong>{((evaluation as any).destination_port ?? activePreset?.flow?.['Destination Port']) ? `Port ${((evaluation as any).destination_port ?? activePreset?.flow?.['Destination Port'])}` : 'None'}</strong>
                 </div>
                 <div className="model-meta-row">
                   <span>Artifact:</span>
@@ -1826,20 +1905,20 @@ function FlowInferenceWorkbench({
               </div>
               <div className="model-verdict-row">
                 <span className="model-verdict">{evaluation.anomaly.is_anomaly ? 'Outlier' : 'Baseline'}</span>
-                <span className="model-metric-val">Score {evaluation.anomaly.anomaly_score.toFixed(4)}</span>
+                <span className="model-metric-val">Score {Number(evaluation.anomaly.anomaly_score ?? 0).toFixed(4)}</span>
               </div>
               <div className="prob-track">
                 <div
                   className="prob-fill-anomaly"
                   style={{
-                    width: `${Math.min(100, Math.max(4, evaluation.anomaly.anomaly_score * 100))}%`,
+                    width: `${Math.min(100, Math.max(4, Number(evaluation.anomaly.anomaly_score ?? 0) * 100))}%`,
                   }}
                 />
               </div>
               <div className="model-meta-table">
                 <div className="model-meta-row">
-                  <span>Threshold ({evaluation.anomaly.threshold_tier}):</span>
-                  <strong>{evaluation.anomaly.threshold.toFixed(4)}</strong>
+                  <span>Threshold ({evaluation.anomaly.threshold_name || (evaluation.anomaly as any).threshold_tier || tier}):</span>
+                  <strong>{Number((evaluation.anomaly as any).calibrated_threshold ?? evaluation.anomaly.threshold ?? 0).toFixed(4)}</strong>
                 </div>
                 <div className="model-meta-row">
                   <span>Threshold Crossed:</span>
@@ -1911,7 +1990,7 @@ function SecurityAlerts({
   const filtered = useMemo(() => {
     return alertsList.filter((alert) => {
       const matchesFilter = filter === 'All' || alert.severity === filter
-      const text = `${alert.title} ${alert.category} ${alert.summary}`.toLowerCase()
+      const text = `${alert.title || ''} ${alert.category || ''} ${alert.summary || ''}`.toLowerCase()
       const matchesQuery = text.includes(query.toLowerCase())
       return matchesFilter && matchesQuery
     })
@@ -2045,7 +2124,7 @@ function AlertRow({
 }) {
   const rowContent = (
     <>
-      <span className={`severity-badge ${severityStyles[alert.severity]}`}><span />{alert.severity}</span>
+      <span className={`severity-badge ${severityStyles[alert.severity] || 'severity-low'}`}><span />{alert.severity || 'Low'}</span>
       <span className="alert-row-copy"><strong>{alert.title}</strong><span>{alert.summary}</span></span>
       <span className="alert-row-meta"><span>{alert.category}</span><time>{alert.time}</time></span>
       {reviewed && <span className="reviewed-label"><Check size={12} /> reviewed</span>}
@@ -2098,7 +2177,7 @@ function IncidentsPage({
   const [showGroupingHelp, setShowGroupingHelp] = useState(false)
 
   const filteredIncidents = useMemo(() => {
-    return incidentsList.filter((incident) => filter === 'All' || incident.status === filter)
+    return incidentsList.filter((incident: Incident) => filter === 'All' || incident.status === filter)
   }, [incidentsList, filter])
 
   return (

@@ -116,6 +116,8 @@ def get_network_activity(
 
 
 @router.get("/alerts", response_model=SecurityAlertsResponse, summary="Security Alerts")
+@router.get("/security-alerts", response_model=SecurityAlertsResponse, include_in_schema=False)
+@router.get("/security-analysis", response_model=SecurityAlertsResponse, include_in_schema=False)
 def get_alerts(
     query: Optional[str] = Query(default=None, description="Filter alerts by keyword in title/summary/category"),
     severity: Optional[str] = Query(default=None, description="Filter alerts by severity: High | Medium | Low | All"),
