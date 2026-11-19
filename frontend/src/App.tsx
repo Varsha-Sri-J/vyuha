@@ -558,9 +558,14 @@ function Sidebar({
 
         {!collapsed && (
           <div className="workspace-switcher">
-            <div className="workspace-icon">A</div>
-            <div className="workspace-copy"><strong>Aranya Foods</strong><span>Security Operations</span></div>
-            <span className="sample-workspace-label">FLOW INTELLIGENCE</span>
+            <div className="workspace-icon">V</div>
+            <div className="workspace-copy">
+              <div className="workspace-title-row">
+                <strong>VYUHA</strong>
+                <span className="sample-workspace-label">FLOW INTELLIGENCE</span>
+              </div>
+              <span>Security Operations</span>
+            </div>
           </div>
         )}
 
@@ -593,7 +598,7 @@ function Sidebar({
         <div className="sidebar-bottom">
           <div className="profile-row" aria-label="Current workspace owner">
             <span className="avatar avatar-small">VS</span>
-            {!collapsed && <span className="profile-copy"><strong>Varsha</strong><span>Security Lead</span></span>}
+            {!collapsed && <span className="profile-copy"><strong>VSJ</strong><span>Security Lead</span></span>}
           </div>
           <button className="collapse-button" onClick={onToggle} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
             {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
@@ -1247,29 +1252,22 @@ function LiveMonitoring({ onNavigate }: { onNavigate: (page: Page) => void }) {
       {/* macOS BPF Permission Notice */}
       {status && !status.bpf_permission && (
         <div className="bpf-alert-banner">
-          <AlertCircle size={18} style={{ flexShrink: 0, marginTop: '2px' }} />
-          <div style={{ flex: 1 }}>
-            <strong>macOS Packet Capture Permissions:</strong> Standard macOS limits raw BPF packet sniffing to root.
-            The engine is currently running safe local demonstration streaming. To capture direct hardware packets from{' '}
-            <code>{selectedInterface}</code>, run in your terminal:
-            <code className="bpf-alert-code">sudo chmod 666 /dev/bpf*</code>
-            <button
-              type="button"
-              onClick={handleCopyCmd}
-              style={{
-                marginLeft: '8px',
-                padding: '2px 8px',
-                borderRadius: '5px',
-                border: '1px solid #d8c3a5',
-                background: '#fffdf9',
-                color: '#6e4b1c',
-                fontSize: '10px',
-                cursor: 'pointer',
-              }}
-            >
-              <Copy size={11} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-              {copied ? 'Copied!' : 'Copy command'}
-            </button>
+          <AlertCircle size={18} className="banner-icon" />
+          <div className="banner-content">
+            <div className="banner-heading">macOS Packet Capture Permissions</div>
+            <p className="banner-body">
+              Standard macOS limits raw BPF packet sniffing to root. The engine is currently running safe local demonstration streaming. To capture direct hardware packets from{' '}
+              <code>{selectedInterface}</code>, run in your terminal:
+              <code className="bpf-alert-code">sudo chmod 666 /dev/bpf*</code>
+              <button
+                type="button"
+                onClick={handleCopyCmd}
+                className="bpf-copy-btn"
+              >
+                <Copy size={11} />
+                {copied ? 'Copied!' : 'Copy command'}
+              </button>
+            </p>
           </div>
         </div>
       )}
@@ -1277,20 +1275,19 @@ function LiveMonitoring({ onNavigate }: { onNavigate: (page: Page) => void }) {
       {/* Error Notice */}
       {errorMessage && (
         <div className="bpf-alert-banner" style={{ background: '#fce8e3', borderColor: '#f3c2b7', color: '#8e3520' }}>
-          <AlertCircle size={18} style={{ flexShrink: 0 }} />
-          <div>{errorMessage}</div>
+          <AlertCircle size={18} className="banner-icon" />
+          <div className="banner-content">{errorMessage}</div>
         </div>
       )}
 
       {/* ML Feature Constraint Notice */}
       <div className="ml-constraint-notice">
-        <Info size={18} style={{ flexShrink: 0, marginTop: '2px' }} />
-        <div>
-          <strong>ML Feature Constraint & Data Integrity:</strong> VYUHA's trained Phase 6 scikit-learn models require
-          all 63 statistical dispersion and inter-arrival time features from CICIDS2017. Standard Zeek <code>conn.log</code> records
-          supply 13 transport-layer connection fields. To prevent fabricated predictions, live connection records are classified with
-          transparent rule-based heuristics (<code>NORMAL</code>, <code>SUSPICIOUS</code>, <code>POTENTIAL THREAT</code>) and marked
-          as <strong>INSUFFICIENT_FEATURES</strong> for ML, preserving raw telemetry without filling missing features with synthetic zeros.
+        <Info size={18} className="banner-icon" />
+        <div className="banner-content">
+          <div className="banner-heading">ML Feature Constraint & Data Integrity</div>
+          <p className="banner-body">
+            VYUHA's trained Phase 6 scikit-learn models require all 63 statistical dispersion and inter-arrival time features from CICIDS2017. Standard Zeek <code>conn.log</code> records supply 13 transport-layer connection fields. To prevent fabricated predictions, live connection records are classified with transparent rule-based heuristics (<code>NORMAL</code>, <code>SUSPICIOUS</code>, <code>POTENTIAL THREAT</code>) and marked as <code>INSUFFICIENT_FEATURES</code> for ML, preserving raw telemetry without filling missing features with synthetic zeros.
+          </p>
         </div>
       </div>
 
